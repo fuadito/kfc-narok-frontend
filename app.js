@@ -292,40 +292,43 @@ async function authSubmit() {
 
     if(role==='customer'){
         const name=document.getElementById('f-name')?.value.trim();
-        const raw=document.getElementById('f-phone')?.value.trim();
+        const raw =document.getElementById('f-phone')?.value.trim();
         if(!name||name.length<2){ toast('Enter your full name','err'); return reset(); }
-        if(!raw||raw.replace(/\D/g,'').length<9){ toast('Enter a valid number','err'); return reset(); }
-        user={name,phone:F.norm(raw)};
+        if(!raw||raw.replace(/\D/g,'').length<9){ toast('Enter a valid phone number','err'); return reset(); }
+        user={name, phone:F.norm(raw)};
+        const isReturning=!!localStorage.getItem('kfc_user');
         localStorage.setItem('kfc_user',JSON.stringify(user));
-        const isReturning = !!localStorage.getItem('kfc_user');
-        localStorage.setItem('kfc_user',JSON.stringify(user));
-        toast(isReturning ? `Welcome back, ${name}! 👋` : `Welcome, ${name}! 🍗`, 'ok');
+        toast(isReturning?`Welcome back, ${name}! 👋`:`Welcome, ${name}! 🍗`,'ok');
         await apiFetch('/api/customer/login',{method:'POST',body:{phone:user.phone,name}});
         reset(); launchCustomer();
-    } else if(role==='rider'){
-    const raw=document.getElementById('f-phone')?.value.trim();
-    if(!raw||raw.replace(/\D/g,'').length<9){ toast('Enter a valid number','err'); return reset(); }
-    user.phone=F.norm(raw);
-    const data=await apiFetch('/api/rider/login',{method:'POST',body:{phone:user.phone}});
-    if(data){ riderState={...riderState,...data,phone:user.phone}; }
-    else { riderState.phone=user.phone; }
-    const isReturningRider = !!localStorage.getItem('kfc_rider'); // check BEFORE saving
-    localStorage.setItem('kfc_rider', JSON.stringify({phone:user.phone}));
-    toast(isReturningRider ? `Welcome back! 🏍️` : `Welcome, Rider! 🏍️`, 'ok');
-    reset(); launchRider();
+      }
+     else if(role==='rider'){
+ const raw=document.getElementById('f-phone')?.value.trim();
+        if(!raw||raw.replace(/\D/g,'').length<9){ toast('Enter a valid phone number','err'); return reset(); }
+        user.phone=F.norm(raw);
+        const data=await apiFetch('/api/rider/login',{method:'POST',body:{phone:user.phone}});
+        if(data){ riderState={...riderState,...data,phone:user.phone}; }
+        else { riderState.phone=user.phone; }
+        const isReturning=!!localStorage.getItem('kfc_rider');
+        localStorage.setItem('kfc_rider',JSON.stringify({phone:user.phone}));
+        toast(isReturning?`Welcome back! 🏍️`:`Welcome, Rider! 🏍️`,'ok');
+        reset(); launchRider();
 
   } else if(role==='kitchen'){
     const code=document.getElementById('f-code')?.value.trim();
-    // Accept any code in demo; production should verify server-side
+    if(!code){ toast('Enter the kitchen passcode','err'); return reset(); }
+    const r=await apiFetch('/api/kitchen/verify',{method:'POST',body:{code}});
+    if(!r?.ok){ toast('Wrong passcode — ask your manager','err'); return reset(); }
     reset(); launchKitchen();
 
   } else if(role==='admin'){
     const code=document.getElementById('f-code')?.value.trim();
     reset(); launchAdmin();
   } 
-
-
 }
+
+
+
 
 function goLanding(){
     screen('s-landing');
@@ -348,7 +351,20 @@ async function launchCustomer(){
     }
 
     renderCats(); renderMenu('Promos'); updateCartUI();
+
+    // Restore active order on login
+      const savedOid = localStorage.getItem('kfc_active_order');
+    if(savedOid){
+        const order = await apiFetch(`/api/orders/${savedOid}`);
+        if(order && !['delivered','cancelled'].includes(order.status)){
+            showTracking(savedOid);
+        } else { 
+                   localStorage.removeItem('kfc_active_order');
+        }
+    }
 }
+
+
 
 function cPanel(id, btn=null){
     document.querySelectorAll('#s-customer .sp').forEach(p=>p.classList.remove('on'));
@@ -381,13 +397,117 @@ function renderMenu(cat){
 }
 
 
+
+// Items that require a HC / OR chicken type choice before adding to cart
+// These are items whose description says "OR / SPICY" — not wings, burgers, nuggets or
+// items that already have a fixed type (Butter Chicken, Original Recipe only, Zinger etc.)
+const CHICKEN_CHOICE_IDS = new Set([
+  1, 3, 4, 5, 6, 7, 9, 10, 11,          // Streetwise items
+  46, 47, 48, 49, 50, 51, 52,            // Sharing Buckets
+  31,                                     // Chicken Lunchbox
+  99                                      // Kiddie Meal 2
+]);
+
+
+
 function addToCart(id){
   const item=Object.values(MENU).flat().find(i=>i.id===id);
   if(!item) return;
-  cart.push({...item, desc: item.desc || item.description || '',note:''});
+
+   // Items with OR / SPICY choice — show picker before adding
+   if(CHICKEN_CHOICE_IDS.has(id)){
+    showChickenPicker(item);
+    return;
+  }
+  // All other items — add straight to cart
+  cart.push({...item, desc: item.desc || item.description || '',note:'', chickenType:null});
   updateCartUI();
   toast(`${item.name} added! 🛒`);
 }
+
+// ── CHICKEN TYPE PICKER ───────────────────────────────────────────────────────
+// Shows a bottom sheet asking HC or OR before adding to cart.
+// The choice is stored as chickenType on the cart item and shown in the cart,
+// order summary, and kitchen board.
+
+let _pickerItem = null; // item waiting for chicken type selection
+
+function showChickenPicker(item){
+  _pickerItem = item;
+
+  // Create sheet if it doesn't exist yet
+  if(!document.getElementById('chicken-sheet')){
+    document.body.insertAdjacentHTML('beforeend',`
+    <div class="overlay" id="chicken-ov" onclick="closeChickenPicker()"></div>
+    <aside class="sheet" id="chicken-sheet">
+      <div class="sh-in">
+        <div class="sh-handle"></div>
+        <h2 class="sh-title">CHOOSE YOUR CHICKEN</h2>
+        <p style="font-size:.84rem;color:var(--muted);margin-bottom:18px" id="cp-item-name"></p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+
+          <button class="chicken-opt" onclick="confirmChickenChoice('HC')">
+            <div style="font-size:2rem;margin-bottom:6px">🔥</div>
+            <div style="font-family:var(--fh);font-size:1rem;letter-spacing:1px">HC</div>
+            <div style="font-size:.75rem;color:var(--muted);margin-top:4px">Hot &amp; Crispy</div>
+          </button>
+
+          <button class="chicken-opt" onclick="confirmChickenChoice('OR')">
+            <div style="font-size:2rem;margin-bottom:6px">🍗</div>
+            <div style="font-family:var(--fh);font-size:1rem;letter-spacing:1px">OR</div>
+            <div style="font-size:.75rem;color:var(--muted);margin-top:4px">Original Recipe</div>
+          </button>
+
+        </div>
+        <button class="btn btn-ghost btn-full" onclick="closeChickenPicker()">Cancel</button>
+      </div>
+    </aside>`);
+
+    // Inject button styles once
+    const style = document.createElement('style');
+    style.textContent=`
+      .chicken-opt{
+        background:var(--dark3);border:2px solid var(--line2);border-radius:var(--r);
+        padding:18px 10px;cursor:pointer;color:var(--white);transition:.15s;width:100%;
+      }
+      .chicken-opt:hover,.chicken-opt:active{ border-color:var(--red);background:var(--dark2); }
+    `;
+    document.head.appendChild(style);
+  }
+
+  // Update item name label
+  document.getElementById('cp-item-name').textContent = item.name;
+
+  // Show sheet
+  document.getElementById('chicken-ov').classList.add('on');
+  document.getElementById('chicken-sheet').classList.add('on');
+  document.body.style.overflow='hidden';
+}
+
+function confirmChickenChoice(type){
+  // type is 'HC' or 'OR'
+  if(!_pickerItem) return;
+  const item = _pickerItem;
+  _pickerItem = null;
+  closeChickenPicker();
+
+  cart.push({
+    ...item,
+    desc:        item.desc || item.description || '',
+    note:        '',
+    chickenType: type   // 'HC' or 'OR' — shown in cart, order summary & kitchen
+  });
+  updateCartUI();
+  toast(`${item.name} (${type}) added! 🛒`);
+}
+
+function closeChickenPicker(){
+  _pickerItem = null;
+  document.getElementById('chicken-ov')?.classList.remove('on');
+  document.getElementById('chicken-sheet')?.classList.remove('on');
+  document.body.style.overflow='';
+}
+
 
 function updateCartUI(){
     const count=cart.length, total=cart.reduce((s,i)=>s+i.price,0);
@@ -415,9 +535,9 @@ function renderCartSheet(){
     su.innerHTML=ac.innerHTML=''; return;
   }
   li.innerHTML=cart.map((item,i)=>`
-     <div class="ci">
+    <div class="ci">
       <div class="ci-info">
-        <div class="ci-name">${item.name}</div>
+        <div class="ci-name">${item.name}${item.chickenType?` <span style="background:var(--red);color:#fff;font-size:.65rem;font-weight:700;padding:1px 6px;border-radius:4px;letter-spacing:.5px;vertical-align:middle">${item.chickenType}</span>`:''}</div>
         <input class="note-inp" placeholder="Special note (e.g. no onions)..." value="${item.note||''}" oninput="cart[${i}].note=this.value"/>
       </div>
       <div class="ci-r">
@@ -476,7 +596,7 @@ async function initPay() {
   const btn=document.getElementById('pay-btn');
   btn.innerHTML='<span class="spin"></span> Placing order...'; btn.disabled=true;
   const total=cart.reduce((s,i)=>s+i.price,0);
-  const notes=cart.filter(i=>i.note).map(i=>`${i.name}: ${i.note}`).join('; ');
+  const notes=cart.filter(i=>i.note||i.chickenType).map(i=>`${i.name}${i.chickenType?' ['+i.chickenType+']':''}: ${i.note||''}`).join('; ');
   const order=await apiFetch('/api/orders',{method:'POST',body:{items:cart,notes,location:userLoc}});
   const oid=order?.id||Math.floor(Math.random()*9000+1000);    //This generates a random 4-digit number between 1000 and 9999.
   active0Id=oid;
@@ -522,7 +642,8 @@ async function renderTracking(oid) {
       `<div class="map-ph"><span style="position:relative;z-index:1;font-size:.8rem;color:var(--muted)">Map updates when rider is assigned</span></div>`}
       <div class="card">
         <div class="card-t">ORDER SUMMARY</div>
-        ${(o.items||[]).map(i=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line);font-size:.87rem"><span>${i.name}${i.note?` <span style="color:var(--orange);font-size:.73rem">(${i.note})</span>`:''}</span><span style="font-family:var(--fh);color:var(--red);letter-spacing:1px">${F.money(i.price)}</span></div>`).join('')}
+         ${(o.items||[]).map(i=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line);font-size:.87rem"><span>${i.name}${i.chickenType?` <span style="background:var(--red);color:#fff;font-size:.62rem;font-weight:700;padding:1px 5px;border-radius:3px;margin-left:4px">${i.chickenType}</span>`:''}${i.note?` <span style="color:var(--orange);font-size:.73rem">(${i.note})</span>`:''}</span><span style="font-family:var(--fh);color:var(--red);letter-spacing:1px">${F.money(i.price)}</span></div>`).join('')}
+      </div>
       </div>
       <div class="card" style="margin-top:11px;text-align:center;font-size:.81rem;color:var(--muted)">
         🔐 Your delivery PIN was sent by SMS<br>
@@ -762,9 +883,6 @@ async function submitReg(){
         <p style="font-size:.82rem;color:var(--muted)">Questions? Call us at</p>
         <p style="font-family:var(--fh);font-size:1.2rem;letter-spacing:1px;margin-top:4px">0702 923 826</p>
       </div>
-      <button class="btn btn-ghost" style="margin-top:24px;color:var(--muted)" onclick="riderState.name='Demo Rider';riderState.regStep=0;renderRiderHome()">
-        Skip to Dashboard (Demo)
-      </button>
     </div>`;
   toast('Application submitted! Under review 📋','ok',5000);
 }
@@ -855,7 +973,7 @@ function renderRiderDelivery(){
       <div class="receipt">
         <div class="receipt-hdr">🧾 KFC NAROK COLLECTION RECEIPT</div>
         <div>Order: <strong>${o.order_number}</strong></div>
-        ${(o.items||[]).map(i=>`<div>• ${i.name}${i.note?` <span style="color:var(--orange)">(${i.note})</span>`:''}</div>`).join('')}
+         ${(o.items||[]).map(i=>`<div>• ${i.name}${i.chickenType?` <strong style="color:var(--red)">[${i.chickenType}]</strong>`:''}${i.note?` <span style="color:var(--orange)">(${i.note})</span>`:''}</div>`).join('')}
         <div class="receipt-note">Show this screen to KFC staff at the counter</div>
       </div>
       <div style="background:var(--dark3);border-radius:var(--r);padding:12px;margin-bottom:12px;font-size:.85rem">
@@ -1006,7 +1124,7 @@ function kCard(o,type){   //Builds a single order card for the kitchen board (or
   }[type];
   return  `<div class="kc" id="kc-${o.id}">
      <div class="kc-top"><div class="kc-num">${o.order_number}</div><div class="kc-age${urgent?' urg':''}">⏱ ${ageMins}m</div></div>
-    <div class="kc-items">${(o.items||[]).map(i=>`<div class="kc-item">${i.name}${i.note?`<div class="kc-note">⚠️ ${i.note}</div>`:''}</div>`).join('')}</div>
+     <div class="kc-items">${(o.items||[]).map(i=>`<div class="kc-item">${i.name}${i.chickenType?`<span style="background:var(--red);color:#fff;font-size:.65rem;font-weight:700;padding:1px 6px;border-radius:4px;margin-left:5px">${i.chickenType}</span>`:''} ${i.note?`<div class="kc-note">⚠️ ${i.note}</div>`:''}</div>`).join('')}</div>
     <div class="kc-area">📍 ${o.customer_area||'Narok'}</div>
     <div class="kc-acts">${action}</div>
   </div>`;
@@ -1272,4 +1390,185 @@ async function adminSignOut() {
     role = null;
     screen('s-landing');
     toast('signed out');
+}
+
+// SUPABASE REALTIME — KITCHEN
+function startKitchenRealtime(){
+  // Remove any existing channel first
+  supa.channel('kitchen-orders').unsubscribe().catch(()=>{});
+  supa.channel('kitchen-orders')
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'orders'},()=>{
+      pollKitchen(); playBeep();
+    })
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'orders'},()=>{
+      pollKitchen();
+    })
+    .subscribe(status=>{
+      if(status==='SUBSCRIBED') console.log('[Realtime] kitchen subscribed');
+    });
+}
+
+// SUPABASE REALTIME - RIDER (receives order dispatches)
+
+function startRiderRealtime(){
+  const phone=riderState.phone||user.phone;
+  if(!phone) return;
+
+  // Unsubscribe existing channels
+  supa.channel('rider-dispatch').unsubscribe().catch(()=>{});
+
+  // Listen for broadcast dispatch events from the backend
+  supa.channel('rider-dispatch')
+    .on('broadcast',{event:'new_order'},({payload})=>{
+      if(!riderState.online||riderState.activeOrder) return;
+      riderState.activeOrder=payload;
+      if(document.getElementById('s-rider')?.classList.contains('on')){
+        renderRiderHome();
+        showRiderOrderAlert(payload);
+        playBeep();
+      }
+    })
+    .subscribe();
+
+  // Also watch for direct assignment on orders table
+  supa.channel('rider-assigned-'+phone)
+    .on('postgres_changes',{
+      event:'UPDATE', schema:'public', table:'orders',
+      filter:`rider_phone=eq.${phone}`
+    },({new:o})=>{
+      if(o.status==='rider_assigned'&&!riderState.activeOrder){
+        riderState.activeOrder=o;
+        renderRiderHome();
+        showRiderOrderAlert(o);
+        playBeep();
+      }
+    })
+    .subscribe();
+}
+
+// SUPABASE REALTIME — CUSTOMER ORDER TRACKING
+function startOrderRealtime(oid){
+  const ch='order-track-'+oid;
+  supa.channel(ch).unsubscribe().catch(()=>{});
+  supa.channel(ch)
+    .on('postgres_changes',{
+      event:'UPDATE', schema:'public', table:'orders',
+      filter:`id=eq.${oid}`
+    },()=>{
+      renderTracking(oid);
+    })
+    .subscribe();
+}
+
+// RIDER ↔ CUSTOMER CHAT  (delivery fee negotiation)
+// Uses Supabase Realtime broadcast — no extra DB table required.
+// Channel name: order-chat-{orderId}
+
+function ensureChatSheet(){
+  if(document.getElementById('chat-sheet')) return;
+  document.body.insertAdjacentHTML('beforeend',`
+  <div class="overlay" id="chat-ov" onclick="closeChat()" style="z-index:1100"></div>
+  <aside class="sheet" id="chat-sheet" style="z-index:1200;max-height:85vh;display:flex;flex-direction:column">
+    <div class="sh-in" style="display:flex;flex-direction:column;height:100%">
+      <div class="sh-handle"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h2 class="sh-title" style="margin:0">💬 DELIVERY FEE CHAT</h2>
+        <button class="btn btn-ghost btn-sm" onclick="closeChat()">✕</button>
+      </div>
+      <div style="background:var(--dark3);border-radius:8px;padding:10px 12px;font-size:.78rem;color:var(--orange);margin-bottom:10px">
+        ⏳ Agree on a delivery fee here before the rider picks up your order. Fee is paid <strong>cash at door</strong>.
+      </div>
+      <div id="chat-msgs" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:4px 0 10px;min-height:120px"></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <input class="inp" id="chat-inp" placeholder="e.g. KES 150 delivery fee?" style="flex:1"
+          onkeydown="if(event.key==='Enter'&&this.value.trim())sendChatMsg()"/>
+        <button class="btn btn-primary" onclick="sendChatMsg()" style="padding:0 18px">Send</button>
+      </div>
+      <div id="chat-quick-btns" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
+    </div>
+  </aside>`);
+}
+
+
+function openChat(orderId, myRole){
+  ensureChatSheet();
+  chatOrderId=orderId; chatMyRole=myRole; chatMsgs=[];
+  renderChatMessages();
+
+  // Quick-suggestion buttons (rider only)
+  const qb=document.getElementById('chat-quick-btns');
+  if(myRole==='rider'){
+    qb.innerHTML=['KES 50','KES 100','KES 150','KES 200','KES 300','KES 500'].map(fee=>
+      `<button class="btn btn-ghost btn-sm" style="font-size:.75rem" onclick="quickFee('${fee}')">${fee}</button>`
+    ).join('');
+  } else {
+    qb.innerHTML=['Sounds good! ✅','Can you do less?','KES 100 is fine','I accept 👍'].map(t=>
+      `<button class="btn btn-ghost btn-sm" style="font-size:.75rem" onclick="quickFee('${t}')">${t}</button>`
+    ).join('');
+  }
+
+  // Realtime broadcast channel for this order chat
+  if(chatChannel){ chatChannel.unsubscribe().catch(()=>{}); }
+  chatChannel=supa.channel('order-chat-'+orderId);
+  chatChannel
+    .on('broadcast',{event:'msg'},({payload})=>{
+      chatMsgs.push(payload);
+      renderChatMessages();
+      playBeep();
+    })
+    .subscribe();
+
+  document.getElementById('chat-ov').classList.add('on');
+  document.getElementById('chat-sheet').classList.add('on');
+  document.body.style.overflow='hidden';
+  setTimeout(()=>document.getElementById('chat-inp')?.focus(),200);
+}
+
+function closeChat(){
+  document.getElementById('chat-ov')?.classList.remove('on');
+  document.getElementById('chat-sheet')?.classList.remove('on');
+  document.body.style.overflow='';
+  if(chatChannel){ chatChannel.unsubscribe().catch(()=>{}); chatChannel=null; }
+}
+
+function quickFee(text){
+  document.getElementById('chat-inp').value=text;
+  sendChatMsg();
+}
+
+async function sendChatMsg(){
+  const inp=document.getElementById('chat-inp');
+  const text=inp?.value.trim();
+  if(!text) return;
+  inp.value='';
+  const msg={
+    role: chatMyRole,
+    name: chatMyRole==='rider'?(riderState.name||'Rider'):(user.name||'Customer'),
+    text,
+    ts: Date.now()
+  };
+  chatMsgs.push(msg);
+  renderChatMessages();
+  // Broadcast to the other side
+  if(chatChannel){
+    await chatChannel.send({type:'broadcast', event:'msg', payload:msg});
+  }
+}
+
+function renderChatMessages(){
+  const el=document.getElementById('chat-msgs');
+  if(!el) return;
+  if(!chatMsgs.length){
+    el.innerHTML='<div style="text-align:center;color:var(--muted);font-size:.82rem;padding:20px 0">No messages yet — say hello! 👋</div>';
+    return;
+  }
+  el.innerHTML=chatMsgs.map(m=>{
+    const isMine=m.role===chatMyRole;
+    const time=new Date(m.ts).toLocaleTimeString('en-KE',{hour:'2-digit',minute:'2-digit'});
+    return `<div style="display:flex;flex-direction:column;align-items:${isMine?'flex-end':'flex-start'}">
+      <div style="font-size:.68rem;color:var(--muted);margin-bottom:2px">${m.name} · ${time}</div>
+      <div style="background:${isMine?'var(--red)':'var(--dark3)'};color:var(--white);padding:9px 13px;border-radius:${isMine?'14px 14px 2px 14px':'14px 14px 14px 2px'};max-width:80%;font-size:.87rem;word-break:break-word">${m.text}</div>
+    </div>`;
+  }).join('');
+  el.scrollTop=el.scrollHeight;
 }
