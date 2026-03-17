@@ -598,7 +598,15 @@ async function initPay() {
   const total=cart.reduce((s,i)=>s+i.price,0);
   const notes=cart.filter(i=>i.note||i.chickenType).map(i=>`${i.name}${i.chickenType?' ['+i.chickenType+']':''}: ${i.note||''}`).join('; ');
   const order=await apiFetch('/api/orders',{method:'POST',body:{items:cart,notes,location:userLoc}});
-  const oid=order?.id||Math.floor(Math.random()*9000+1000);    //This generates a random 4-digit number between 1000 and 9999.
+
+  // If order creation failed — stop here, show error, let customer try again
+  if(!order?.id){
+    btn.innerHTML='✅ I Have Paid — Place Order'; btn.disabled=false;
+    toast('Could not place order — check your connection and try again','err',5000);
+    return;
+  }
+
+  const oid=order.id;
   active0Id=oid;
   localStorage.setItem('kfc_active_order',oid);
   btn.textContent='📱 Awaiting M-Pesa...';
@@ -619,7 +627,16 @@ function showTracking(oid){
 
 async function renderTracking(oid) {
     let o=await apiFetch(`/api/orders/${oid}`);
-    if(!o) o={id:oid,order_number:`NRK-${oid}`,status:'cooking',items:[{name:'Your order',price:480}],food_amount:480,customer_area:'Narok Town',rider_lat:null,rider_lng:null};
+     if(!o){
+      document.getElementById('track-body').innerHTML=`
+        <div class="empty" style="padding-top:60px">
+          <div class="ei">📦</div>
+          <h3>ORDER NOT FOUND</h3>
+          <p style="font-size:.83rem;color:var(--muted)">Could not load order #${oid}.<br>Check your connection or contact KFC Narok.</p>
+          <button class="btn btn-ghost" style="margin-top:16px" onclick="cPanel('menu')">← Back to Menu</button>
+        </div>`;
+      return;
+    }
     const steps=[
         {lbl:'Paid',     match:['paid','cooking','ready','rider_assigned','picked_up','delivered']},
         {lbl:'Cooking',  match:['cooking','ready','rider_assigned','picked_up','delivered']},
