@@ -46,9 +46,8 @@ const MENU = {
         {id:7, name:'Streetwise 3 with Rice', price:690,   desc:'3pcs OR / SPICY + Colonel Rice',                        img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/9ba70c82-600c-68f5-96bd-5ad7f6a784d2.jpeg?a=8cbc68dc-2d6e-8089-0b7a-ecbfd636dd97'},
         {id:8, name:'Streetwise 3 Crunch',    price:650,   desc:'3 pcs Original Recipe + Tortilla chips',                img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/3acb77db-7590-9f73-63cd-5474b569c4d2.jpeg?a=0f0aab3c-3ce6-63cb-3b88-24f51b1b6b84'},
         {id:9, name:'Streetwise 5',           price:1200,  desc:'5pcs OR / SPICY + Lrg. fries',                          img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/d332379d-7387-21b8-75e0-e69787140f20.jpeg?a=1f96a8ba-ee8e-3a9a-7734-f217b5e2b673'},
-        {id:10, name:'Streetwise 5 Crunch',    price:1150,  desc:'5pcs OR / SPICY + Tortilla chips',                     img:'https://glovo.dhmedia.io/image/menus-glovo/products/d6d5feb6fc6e552d609e16ccccb772043e1a639ea9a935db223c06a1a293e3b4?t=W3sicmVzaXplIjp7Im1vZGUiOiJmaXQiLCJ3aWR0aCI6MzIwLCJoZWlnaHQiOjMyMH19XQ=='},
+       {id:10, name:'Streetwise 5 Crunch', price:1150, desc:'5pcs OR / SPICY + Tortilla chips',                          img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/9f60ca25-162c-5872-e514-93615c9430a8.jpeg?a=2875a9d0-f24e-9f95-0c02-05772acc77ff'},
         {id:11, name:'Streetwise 7',          price:1790,  desc:'7pc OR / SPICY + Family fries + 1.25l soda',            img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/f7479255-3aab-2264-0729-71591251283d.jpeg?a=6d2ac5f0-7591-fb3e-413f-30e36455129f'}, 
-        {id:13, name:'Streetwise 9 Butter Chicken',  price:1990, desc:'9 pcs Butter Chicken + chips',                   img:'https://glovo.dhmedia.io/image/menus-glovo/products/8114f8df70a749a6b666bce4d1e146e1a6f45e0026a3eb17a1c97b608fe768cd?t=W3sicmVzaXplIjp7Im1vZGUiOiJmaXQiLCJ3aWR0aCI6MzIwLCJoZWlnaHQiOjMyMH19XQ=='},         
     ],
 
     Burgers:[
@@ -80,7 +79,6 @@ const MENU = {
     ],
 
     Wings:[
-         {id:36, name:'Mega Wing Box Butter Chicken', price:790,  desc:'Wings + Butter Chicken sauce + chips + drink',         img:'https://glovo.dhmedia.io/image/menus-glovo/products/e1f6b814dd2d1ee2c1397d014fd32aa3bccd0c030a8cb4159cefe776bd015577?t=W3sicmVzaXplIjp7Im1vZGUiOiJmaXQiLCJ3aWR0aCI6MzIwLCJoZWlnaHQiOjMyMH19XQ=='},
          {id:37, name:'Zinger Wings 4 pc',            price:490,  desc:'4 pcs spicy Zinger wings',                            img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/f70d022b-ba80-5169-9262-f9fa98598a00.jpeg?a=d90e2db2-b7b4-c670-8137-c8831d186ae7'},
          {id:38, name:'Zinger Wings 8 pc',            price:850,  desc:'8 pcs spicy Zinger wings',                            img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/f70d022b-ba80-5169-9262-f9fa98598a00.jpeg?a=d90e2db2-b7b4-c670-8137-c8831d186ae7'},
          {id:39, name:'Zinger Wings 12 pc',           price:1200, desc:'12 pcs spicy Zinger wings',                           img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/f70d022b-ba80-5169-9262-f9fa98598a00.jpeg?a=d90e2db2-b7b4-c670-8137-c8831d186ae7'},
