@@ -625,11 +625,25 @@ async function initPay() {
   const oid=order.id;
   active0Id=oid;
   localStorage.setItem('kfc_active_order',oid);
-  btn.textContent='📱 Awaiting M-Pesa...';
+ 
+  // Show STK status box if the backend sent a push, otherwise keep manual instructions
+    const stkBox=document.getElementById('stk-status');
+  const manualPay=document.getElementById('manual-pay');
+  if(order.stkSent){
+    // STK push was sent — highlight the phone prompt
+    if(stkBox)  stkBox.style.display='block';
+    if(manualPay) manualPay.style.display='none';
+    btn.innerHTML='📱 Waiting for M-Pesa payment...'; btn.disabled=true;
+    toast('Check your phone — M-Pesa prompt sent! 📱','ok',6000);
+  } else {
+    // STK not yet live — manual payment flow
+    btn.innerHTML='✅ I Have Paid — Place Order'; btn.disabled=false;
+    toast('Order placed! Please complete M-Pesa payment 📱','ok',5000);
+  }
+
  // go to tracking immediately, status updates when payment is done
  cart=[]; updateCartUI();
- toast('Order placed! Please complete M-pesa payment 📱','ok',5000);
-showTracking(oid);
+ showTracking(oid);
 
 }
 

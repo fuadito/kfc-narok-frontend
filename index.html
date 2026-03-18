@@ -115,6 +115,15 @@
     </div>
     <div class="step-bod">
         <div class="pay-big" id="pay-amt">KES 0</div>
+          <!-- STK prompt status — shown when M-Pesa push is sent -->
+            <div id="stk-status" style="display:none;background:var(--dark3);border-radius:var(--r);padding:14px 16px;margin:12px 0;text-align:center">
+            <div style="font-size:1.8rem;margin-bottom:6px">📱</div>
+            <div style="font-weight:700;color:var(--white);margin-bottom:4px">CHECK YOUR PHONE</div>
+            <div style="font-size:.82rem;color:var(--muted)">An M-Pesa payment prompt has been sent to your phone. Enter your PIN to pay.</div>
+            <div style="font-size:.75rem;color:var(--orange);margin-top:8px">Didn't receive it? Use the manual steps below.</div>
+        </div>
+
+         <!-- Manual payment instructions — always shown as fallback -->
         <div class="pay-row"><span class="mpesa-chip">M-PESA</span><span>Till Number: <strong>9119681</strong> (KFC NAROK)</span></div>
         <div style="background:var(--dark3);border-radius:var(--r);padding:14px 16px;margin:12px 0">
             <div style="font-weight:600;color:var(--white);margin-bottom:10px;font-size:.85rem">HOW TO PAY:</div>
