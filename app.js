@@ -45,9 +45,11 @@ const MENU = {
         {id:6, name:'Streetwise 3',           price:690,   desc:'3pcs OR / SPICY + Reg. fries',                          img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/1185e73b-10f6-f5d6-a3ad-564ce2dc0c09.jpeg?a=a55ab509-2f77-bffb-5bc1-69e8381b26ea'},
         {id:7, name:'Streetwise 3 with Rice', price:690,   desc:'3pcs OR / SPICY + Colonel Rice',                        img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/9ba70c82-600c-68f5-96bd-5ad7f6a784d2.jpeg?a=8cbc68dc-2d6e-8089-0b7a-ecbfd636dd97'},
         {id:8, name:'Streetwise 3 Crunch',    price:650,   desc:'3 pcs Original Recipe + Tortilla chips',                img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/3acb77db-7590-9f73-63cd-5474b569c4d2.jpeg?a=0f0aab3c-3ce6-63cb-3b88-24f51b1b6b84'},
-        {id:9, name:'Streetwise 5',           price:1200,  desc:'5pcs OR / SPICY + Lrg. fries',                          img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/d332379d-7387-21b8-75e0-e69787140f20.jpeg?a=1f96a8ba-ee8e-3a9a-7734-f217b5e2b673'},
+        {id:9, name:'Streetwise 5',           price:1200,  desc:'5pcs OR / SPICY + Lrg. chips',                          img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/d332379d-7387-21b8-75e0-e69787140f20.jpeg?a=1f96a8ba-ee8e-3a9a-7734-f217b5e2b673'},
        {id:10, name:'Streetwise 5 Crunch', price:1150, desc:'5pcs OR / SPICY + Tortilla chips',                          img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/9f60ca25-162c-5872-e514-93615c9430a8.jpeg?a=2875a9d0-f24e-9f95-0c02-05772acc77ff'},
-        {id:11, name:'Streetwise 7',          price:1790,  desc:'7pc OR / SPICY + Family fries + 1.25l soda',            img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/f7479255-3aab-2264-0729-71591251283d.jpeg?a=6d2ac5f0-7591-fb3e-413f-30e36455129f'}, 
+        {id:11, name:'Streetwise 7',          price:1790,  desc:'7pc OR / SPICY + Family chips + 1.25l soda',            img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/f7479255-3aab-2264-0729-71591251283d.jpeg?a=6d2ac5f0-7591-fb3e-413f-30e36455129f'}, 
+        {id:106, name:'Streetwise 2 Meal',    price: 590,   desc:'2 pcs, regular chips and 350ml soda',                  img:'https://glovo.dhmedia.io/image/menus-glovo/products/0d2663b6946a51471ff5433aa4d04241ff61d96be5e090351985c24c04c6f03e?t=W3sicmVzaXplIjp7Im1vZGUiOiJmaXQiLCJ3aWR0aCI6MzIwLCJoZWlnaHQiOjMyMH19XQ==' },
+        {id:107,  name:'Streetwise 3 Meal',   price:790,    desc:'3 pcs, regular chips, 350ml soda',                     img:'https://glovo.dhmedia.io/image/menus-glovo/products/a957673d32fa6a46ef8c56f83c28f2eca8dd37196c6af960f3466fdf2f8a2c94?t=W3sicmVzaXplIjp7Im1vZGUiOiJmaXQiLCJ3aWR0aCI6MzIwLCJoZWlnaHQiOjMyMH19XQ=='},
     ],
 
     Burgers:[
@@ -61,7 +63,7 @@ const MENU = {
         {id:21, name:'Double Crunch Burger Meal',   price: 890, desc:'Double Crunch Burger + Reg. chips + 500ml soda',  img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/f8c32194-96f3-49eb-437e-9d33377ee598.jpeg?a=cd6686fe-a21d-9350-64cd-1df38670a232'},
         {id:22, name:'Legend Burger',               price:690,  desc:'The legendary KFC burger',    img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/3b55a114-a25a-7a06-1b96-60d6002af506.jpeg?a=fdf9f88f-d102-f38a-d750-0e6bbf039073'},
         {id:23, name:'Legend Burger Meal',     price:890,     desc:'Legend Burger + Reg. chips + 500ml soda', img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/7fde61eb-f8c2-371e-ed06-faa9f0f0bf37.jpeg?a=ec46ad65-c649-c487-5cb2-1bf15e90415c'},
-        {id:24, name:'Nyama Nyama Burger',     price:850,     desc:'Nyama Nyama Burger + Reg. chips + 500ml soda', img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/147575e3-fedf-1acd-cda9-b0ef8f608a78.jpeg?a=3d44471c-8e0c-6ca1-31fe-1918e2f1b623'},
+        {id:24, name:'Nyama Nyama Burger',     price:850,     desc:'Nyama Nyama Burger'       , img:'https://glovo.dhmedia.io/image/menus-glovo/products/0f87a5a3e798d3ffb4bfa4601cc52eb25b6850bc01c102537993fca56e6ed2de?t=W3sicmVzaXplIjp7Im1vZGUiOiJmaXQiLCJ3aWR0aCI6MzIwLCJoZWlnaHQiOjMyMH19XQ=='},
         {id:25, name:'Nyama Nyama Burger Meal', price:1100,   desc:'Nyama Nyama Burger + Reg. chips + 500ml soda',  img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/147575e3-fedf-1acd-cda9-b0ef8f608a78.jpeg?a=3d44471c-8e0c-6ca1-31fe-1918e2f1b623'},
         {id:26, name:'Hash Brown Burger',      price:390,     desc:'Vegeterian burger with hashbrown',           img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/441206d2-05ed-e644-fa66-29c268f4793a.jpeg?a=32d252ba-0fe9-5de6-2e65-bba24d9528c0'},
         {id:27, name:'Hash Brown Burger Meal',       price:590,  desc:'Hash Brown Burger + Reg. chips + 500ml soda',           img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/7bd3de7c-781b-6b97-40e9-98b4e6a903c2.jpeg?a=16c5dd64-0087-69f1-9149-633aaadb2923'},
@@ -146,6 +148,7 @@ const MENU = {
         {id:86, name:'Cheese Cake Krusher',          price:350,  desc:'Creamy Cheese Cake Krusher',                         img:'https://glovo.dhmedia.io/image/menus-glovo/products/ec4ae52effafbe596592bc3d23a662c14ffb80cb7d02ae500a8b71d6d2aa232f?t=W3sicmVzaXplIjp7Im1vZGUiOiJmaXQiLCJ3aWR0aCI6MzIwLCJoZWlnaHQiOjMyMH19XQ=='},
         {id:87, name:'Mixed Berry Krusher',          price:350,  desc:'Chilled Mixed Berry Krusher',                        img:'https://glovo.dhmedia.io/image/menus-glovo/products/235b301cf75c6c3ddb52c7e3312fc6400d313bbd6a85d8e6df6cd00bb3559431?t=W3sicmVzaXplIjp7Im1vZGUiOiJmaXQiLCJ3aWR0aCI6MzIwLCJoZWlnaHQiOjMyMH19XQ=='},
         {id:88, name:'Blueberry Krusher',            price:350,  desc:'Chilled Blueberry Krusher',                          img:'https://glovo.dhmedia.io/image/menus-glovo/products/91cfe59a723117f36de6c99a3802ef704acdfa23b922a3aa043393c786203a10?t=W3sicmVzaXplIjp7Im1vZGUiOiJmaXQiLCJ3aWR0aCI6MzIwLCJoZWlnaHQiOjMyMH19XQ=='},
+        {id:108,  name:'Butterscotch Krusher',       price:350,  desc:'Chilled Butterscotch Krusher',                       img:'https://glovo.dhmedia.io/image/menus-glovo/products/208a7c15df177d20624c96f3f2f263a70701666b630c687f3292bf0c393dd45a?t=W3sicmVzaXplIjp7Im1vZGUiOiJmaXQiLCJ3aWR0aCI6MzIwLCJoZWlnaHQiOjMyMH19XQ=='}
   ],
 
   Desserts:[
@@ -395,12 +398,12 @@ function renderMenu(cat){
 // These are items whose description says "OR / SPICY" — not wings, burgers, nuggets or
 // items that already have a fixed type (Butter Chicken, Original Recipe only, Zinger etc.)
 const CHICKEN_CHOICE_IDS = new Set([
-  1, 3, 4, 5, 6, 7, 9, 10, 11,          // Streetwise items
+  1, 3, 4, 5, 6, 7, 9, 10, 11,106,107,         // Streetwise items
   46, 47, 48, 49, 50, 51, 52,            // Sharing Buckets
   31,                                     // Chicken Lunchbox
   99,                                      // Kiddie Meal 2
   16,17,20,21,22,23,24,25,                 // Burgers
-    1001,1002,1003,1004                    // Promos
+  1001,1002,1003,1004                    // Promos
 ]);
 
 
