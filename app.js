@@ -343,7 +343,11 @@ async function launchCustomer(){
     // Fetch menu from backend, fall back to hardcoded MENU if offline
     const data = await apiFetch('/api/menu');
     if(data && Object.keys(data).length){
-      Object.assign(MENU, data);
+      // Replace each category's items directly — preserves sort_order from DB
+      // Object.assign is NOT used because numeric-keyed arrays get reordered by JS
+      Object.keys(data).forEach(cat => {
+        MENU[cat] = data[cat];
+      });
     }
 
     renderCats(); renderMenu('Promos'); updateCartUI();
@@ -1445,11 +1449,23 @@ document.addEventListener('DOMContentLoaded', async () => {
   const saved = localStorage.getItem('kfc_user');
   if(saved){ try{ user=JSON.parse(saved); }catch{} }
 
+  // Check URL for hidden role access — not shown on landing page
+  // Kitchen: yoursite.com/?role=kitchen
+  // Admin:   yoursite.com/?role=admin
+  const urlRole = new URLSearchParams(window.location.search).get('role');
+  if(urlRole === 'kitchen'){
+    selectRole('kitchen');
+    return;
+  }
+  if(urlRole === 'admin'){
+    screen('s-admin-login');
+    return;
+  }
 
-  // check for existing Supabase admin session
-  const { data: { session}} = await supa.auth.getSession();
+  // Check for existing Supabase admin session
+  const { data: { session }} = await supa.auth.getSession();
   if(session){
-    role ='admin';
+    role = 'admin';
     launchAdmin();
   }
 });
