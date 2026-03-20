@@ -387,36 +387,25 @@ function renderMenu(cat){
     const filtered=all.filter(i=>i.category===cat);
     const grouped={};
     filtered.forEach(i=>{ if(!grouped[i.category])grouped[i.category]=[]; grouped[i.category].push(i); });
-
-    const isBrandNew = cat === 'Brand New';
-
-    document.getElementById('menu-list').innerHTML=Object.entries(grouped).map(([c,items],gi)=>`
+    document.getElementById('menu-list').innerHTML=Object.entries(grouped).map(([c,items])=>`
     <div class="menu-sec-lbl">${c}</div>
-        ${isBrandNew
-      ? `<div class="mi-grid">${items.map((item,ii)=>`
-          <div class="mi-card" style="animation-delay:${ii*.07}s" onclick="addToCart(${item.id})">
-            <div class="mi-card-img">
-              ${item.img
-                ? `<img src="${item.img}" alt="${item.name}" loading="lazy"/>`
-                : `<div class="mi-card-emoji">${F.emoji(c)}</div>`}
+    <div class="mi-grid">${items.map((item,ii)=>`
+        <div class="mi-card" style="animation-delay:${ii*.07}s" onclick="addToCart(${item.id})">
+          <div class="mi-card-img">
+            ${item.img
+              ? `<img src="${item.img}" alt="${item.name}" loading="lazy"/>`
+              : `<div class="mi-card-emoji">${F.emoji(c)}</div>`}
+          </div>
+          <div class="mi-card-body">
+            <div class="mi-card-name">${item.name}</div>
+            <div class="mi-card-desc">${item.desc || item.description || ''}</div>
+            <div class="mi-card-foot">
+              <div class="mi-card-price">${F.money(item.price)}</div>
+              <div class="mi-add">+</div>
             </div>
-            <div class="mi-card-body">
-              <div class="mi-card-name">${item.name}</div>
-              <div class="mi-card-desc">${item.desc || item.description || ''}</div>
-              <div class="mi-card-foot">
-                <div class="mi-card-price">${F.money(item.price)}</div>
-                <div class="mi-add">+</div>
-              </div>
-            </div>
-          </div>`).join('')}</div>`
-      : items.map((item,ii)=>`
-        <div class="mi" style="animation-delay:${(gi*5+ii)*.045}s" onclick="addToCart(${item.id})">
-        ${item.img
-            ? `<div class="mi-img"><img src="${item.img}" alt="${item.name}" loading="lazy"/></div>`
-            : `<div class="mi-emoji">${F.emoji(c)}</div>` }
-         <div class="mi-info"><div class="mi-name">${item.name}</div><div class="mi-desc">${item.desc || item.description|| ''}</div></div>
-          <div class="mi-r"><div class="mi-price">${F.money(item.price)}</div><div class="mi-add">+</div></div>
-          </div>`).join('')}`).join('');
+          </div>
+        </div>`).join('')}</div>
+    `).join('');
 }
 
 
