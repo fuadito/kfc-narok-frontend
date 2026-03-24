@@ -592,7 +592,7 @@ function getAddOns(item) {
   // ── Upsize chips ──────────────────────────────────────────────────────────
   // Regular → Large (+120): Streetwise 1, 2, 3 variants (not crunch, not 5/7)
   if (name.includes('streetwise') && !name.includes('crunch') && !name.includes('with rice') &&
-      !name.includes('streetwise 5') && !name.includes('streetwise 7') && !name.includes('Butter Chicken'))
+      !name.includes('streetwise 5') && !name.includes('streetwise 7') && !name.includes('streetwise 9 butter chicken'))
     addOns.push({ key:'upsize_lg', label:'Upsize to Large Chips +120', price:120,
       img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/4f7f0a4a-4159-7c62-35f6-1b2220b6167b.jpeg?a=c1974a1a-10e6-e981-ab6c-79ceb536ade5' });
   // Large → Family (+220): Streetwise 5 only (7 already has family chips)
