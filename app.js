@@ -592,7 +592,7 @@ function getAddOns(item) {
   // ── Upsize chips ──────────────────────────────────────────────────────────
   // Regular → Large (+120): Streetwise 1, 2, 3 variants (not crunch, not 5/7)
   if (name.includes('streetwise') && !name.includes('crunch') && !name.includes('with rice') &&
-      !name.includes('streetwise 5') && !name.includes('streetwise 7') && !name.includes('streetwise 9 butter chicken'))
+      !name.includes('streetwise 5') && !name.includes('streetwise 7') && !name.includes('streetwise 9'))
     addOns.push({ key:'upsize_lg', label:'Upsize to Large Chips +120', price:120,
       img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/4f7f0a4a-4159-7c62-35f6-1b2220b6167b.jpeg?a=c1974a1a-10e6-e981-ab6c-79ceb536ade5' });
   // Large → Family (+220): Streetwise 5 only (7 already has family chips)
@@ -601,7 +601,7 @@ function getAddOns(item) {
       img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/0838ced2-9f6c-1380-bc7e-b73894eb68dd.jpeg?a=bbffd18d-2738-770b-4b5c-d56f10b6dcf3' });
 
   // ── Salad — all Streetwise items ─────────────────────────────────────────
-  if (name.includes('streetwise') && !name.includes('streetwise 9 butter chicken')) {
+  if (name.includes('streetwise') && !name.includes('streetwise 9')) {
     addOns.push({ key:'salad_sm',  label:'Add Salad Small',   price:100,
       img:'https://cdn.tictuk.com/174eef87-5a5a-dc2e-edbf-611f0131dfe8/aed04276-4842-6e92-7d13-3b7521fed2b7.jpeg?a=95b7ba3d-4556-563a-1d93-d6562905f61b' });
     addOns.push({ key:'salad_reg', label:'Add Salad Regular', price:270,
