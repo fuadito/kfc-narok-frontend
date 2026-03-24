@@ -777,7 +777,10 @@ if(!amountPaid || amountPaid < orderTotal){
     ...item,
     price: item.price + Object.values(item.addOns||{}).reduce((s,a)=>s+a.price,0)
   }));
-  const order=await apiFetch('/api/orders',{method:'POST',body:{items:orderItems,notes,location:userLoc}});
+  const order=await apiFetch('/api/orders',{method:'POST',body:{
+    items:orderItems,notes,location:userLoc,
+    mpesa_reference:`${mpesaName} · KES ${amountPaid}`
+  }});
 
   // If order creation failed — stop here, show error, let customer try again
   if(!order?.id){
