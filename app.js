@@ -750,7 +750,10 @@ function removeCartItem(i){
 }
 
 function goToPayment(){
-  document.getElementById('pay-amt').textContent=F.money(cart.reduce((s,i)=>s+i.price,0));
+  const total = cart.reduce((s,i)=>s+i.price,0);
+  document.getElementById('pay-amt').textContent=F.money(total);
+  const amt2 = document.getElementById('pay-amt2');
+  if (amt2) amt2.textContent = F.money(total)
   cPanel('payment');
 }
 
@@ -822,6 +825,14 @@ function showTracking(oid){
     setTimeout(()=>clearInterval(iv),300000);
 }
 
+async function loadHistory(){
+  const data = await apiFetch('/api/customer/orders');
+  const orders = data?.orders || [];
+  document.getElementById('hist-list').innerHTML = orders.length
+  ? orders.map(o=>orderRow(o)).join('')
+  : '<div class="empty"><div class="ei">📋</div><h3>NO ORDERS YET</h3><p>Your order history will appear here</p></div>';
+}
+
 async function renderTracking(oid) {
     let o=await apiFetch(`/api/orders/${oid}`);
      if(!o){
@@ -854,6 +865,9 @@ async function renderTracking(oid) {
     <div style="padding:0 16px 16px;max-width:500px;margin:0 auto">
       ${o.rider_lat?`<div class="map-ph"><span style="position:relative;z-index:1;font-size:.85rem;color:var(--muted2)">Rider location</span><a class="map-link" href="https://maps.google.com/?q=${o.rider_lat},${o.rider_lng}" target="_blank">📍 Open Map</a></div>`:
       `<div class="map-ph"><span style="position:relative;z-index:1;font-size:.8rem;color:var(--muted)">Map updates when rider is assigned</span></div>`}
+      ${o.status==='rider_assigned'||o.status==='picked_up'?`
+        <button class="btn btn-ghost btn-full" style="margin-top:8px" 
+    onclick="openChat(${o.id},'customer')">💬 Chat with Rider - Agree Delivery Fee</button>`:''}    
       <div class="card">
         <div class="card-t">ORDER SUMMARY</div>
          ${(o.items||[]).map(i=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line);font-size:.87rem"><span>${i.name}${i.chickenType?` <span style="background:var(--red);color:#fff;font-size:.62rem;font-weight:700;padding:1px 5px;border-radius:3px;margin-left:4px">${i.chickenType}</span>`:''}${i.note?` <span style="color:var(--orange);font-size:.73rem">(${i.note})</span>`:''}</span><span style="font-family:var(--fh);color:var(--red);letter-spacing:1px">${F.money(i.price)}</span></div>`).join('')}
@@ -1194,6 +1208,10 @@ function renderRiderDelivery(){
         📍 Deliver to: <strong>${o.customer_area}</strong><br>
         💰 Delivery fee: <strong style="color:var(--green)">Agree with customer</strong> - collect cash at door
       </div>
+      <button class="btn btn-ghost btn-full" style="margin-top:8px"
+          onclick="openChat(${o.id},'rider')">
+          💬 Chat with Customer — Negotiate Fee
+      </button>
       ${riderState.collected
         ?`<button class="btn btn-primary btn-full" onclick="showPin()">🔐 Enter Customer PIN</button>`
         :`<button class="btn btn-green btn-full" onclick="markCollected()">✅ Food Collected — Start Delivery</button>`}
@@ -1414,6 +1432,10 @@ function orderRow(o){
     <div class="or-l">
       <div class="or-num">${o.order_number}</div>
       <div class="or-m">${items} · ${o.customer_area||'Narok'} · ${F.date(o.created_at)}</div>
+      ${o.mpesa_reference
+        ? `<div style="font-size:.72rem;color:var(--green);font-weight:600;margin-top:3px">💳 ${o.mpesa_reference}</div>`
+        : `<div style="font-size:.72rem;color:var(--orange);margin-top:3px">⏳ No payment proof</div>`
+      }
       </div>
     <div class="or-r">
       <div class="or-p">${F.money(o.food_amount)}</div>
