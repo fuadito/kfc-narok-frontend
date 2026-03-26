@@ -808,7 +808,7 @@ if(!amountPaid || amountPaid < orderTotal){
   } else {
     // STK not yet live — manual payment flow
     btn.innerHTML='✅ I Have Paid — Place Order'; btn.disabled=false;
-    toast('Order placed! Please complete M-Pesa payment 📱','ok',5000);
+    toast('Order placed!📱','ok',5000);
   }
 
  // go to tracking immediately, status updates when payment is done
@@ -1440,6 +1440,7 @@ function orderRow(o){
     <div class="or-r">
       <div class="or-p">${F.money(o.food_amount)}</div>
       <span class="badge ${F.badge(o.status)}" style="margin-top:3px">${F.status(o.status)}</span>
+      ${o.status==='pending'?`<button class="btn btn-ghost btn-sm" style="margin-top:6px;color:var(--green);font-size:.75rem" onclick="markOrderPaid('${o.order_number}','${o.id}')">✅ Mark as Paid</button>`:''}
     </div>
   </div>`;
 }
