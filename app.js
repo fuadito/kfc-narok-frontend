@@ -1218,7 +1218,6 @@ function renderRiderDelivery(){
     </div>
   </div>`;
 }
-
 function markCollected(){
     riderState.collected=true;
     toast('Great! Now deliver to the customer 🏍️','ok');
@@ -1444,6 +1443,14 @@ function orderRow(o){
     </div>
   </div>`;
 }
+
+async function markOrderPaid(num, id) {
+  if(!confirm(`Confirm payment received for ${num}?`)) return;
+  await apiFetch(`/api/admin/orders/${id}/mark-paid` ,{method:'POST'});
+  toast(`${num} marked as paid ✅`,'ok')
+  renderAdminOrders();
+}
+
 
 async function renderAdminRiders(){
   const data=await apiFetch('/api/admin/riders/pending');
