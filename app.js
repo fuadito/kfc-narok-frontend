@@ -186,27 +186,32 @@ function ago(mins){ return new Date(Date.now()-mins*60000).toISOString();}
 
 //API HELPER
 async function apiFetch(path, opts={}) {
-  // Get Supabase token from localStorage
+  // Get Supabase token from localStorage — only present for admin sessions
   const supaToken = localStorage.getItem('sb-cylzuyhdnuvmhfjudsmf-auth-token');
   let token = '';
   try {
     token = supaToken ? JSON.parse(supaToken).access_token : '';
   } catch {}
-  
+
+  // Only send Authorization header when a real token exists.
+  // Customers and riders have no Supabase session so token is '' —
+  // sending 'Bearer ' (empty) is wasteful and confusing in server logs.
+  const authHeaders = token ? { 'Authorization': 'Bearer ' + token } : {};
+
   try {
     const r = await fetch(API+path, {
       headers: {
-        'Content-Type':'application/json',
-        'x-user-phone':user.phone,
-        'Authorization': 'Bearer ' + token,  // Add this line
+        'Content-Type': 'application/json',
+        'x-user-phone': user.phone,
+        ...authHeaders,
         ...(opts.headers||{})
       },
-      ...opts, 
-      body:opts.body?JSON.stringify(opts.body):undefined
+      ...opts,
+      body: opts.body ? JSON.stringify(opts.body) : undefined
     });
     if(!r.ok) throw new Error(r.status);
     return r.json();
-  } catch { return null;}
+  } catch { return null; }
 }
 
 // TOAST
@@ -259,8 +264,23 @@ function selectRole(r){
     kitchen: { icon:'👨‍🍳',title:'KITCHEN', sub:'Enter the kitchen passcode to view the order board.', fields:'code'},
     admin:   { icon:'⚙️', title:'ADMIN',   sub:'Enter your admin passcode to access the dashboard.', fields:'code'}, 
     }[r];
-    // Rider, Kitchen, Admin - go directly to auth
-    if(r === 'rider' || r === 'kitchen' || r === 'admin'){
+    // Rider — show Sign In / Register options
+    if(r === 'rider'){
+        document.getElementById('ai').textContent=cfg.icon;
+        document.getElementById('at').textContent='RIDER';
+        document.getElementById('as').textContent='Sign in or create a new rider account';
+        document.getElementById('af').innerHTML=`
+          <div class="auth-options">
+            <button class="btn btn-primary btn-full btn-lg" onclick="showRiderSignIn()">Sign In</button>
+            <button class="btn btn-ghost btn-full" style="margin-top:12px;background:var(--dark2);border:2px solid var(--line2)" onclick="showRiderRegister()">New Rider — Register</button>
+          </div>`;
+        screen('s-auth');
+        const contBtn = document.getElementById('auth-btn');
+        if(contBtn) contBtn.style.display = 'none';
+        return;
+    }
+    // Kitchen, Admin - go directly to auth
+    if(r === 'kitchen' || r === 'admin'){
         document.getElementById('ai').textContent=cfg.icon;
         document.getElementById('at').textContent=cfg.title;
         document.getElementById('as').textContent=cfg.sub;
@@ -344,6 +364,33 @@ function showCustomerRegister(){
   if(contBtn) { contBtn.style.display = 'block'; contBtn.textContent = 'Create Account →'; }
   setTimeout(()=>document.querySelector('#af input')?.focus(),100);
   enableEnterKey('auth-btn');
+}
+
+// ── RIDER AUTH SCREENS ────────────────────────────────────────────────────────
+
+function showRiderSignIn(){
+  // Existing rider — just needs phone to look up their account
+  document.getElementById('at').textContent='RIDER SIGN IN';
+  document.getElementById('as').textContent='Enter your registered phone number';
+  document.getElementById('af').innerHTML=buildFields('phone');
+  const contBtn = document.getElementById('auth-btn');
+  if(contBtn){ contBtn.style.display='block'; contBtn.textContent='Sign In →'; }
+  setTimeout(()=>document.querySelector('#af input')?.focus(),100);
+  enableEnterKey('auth-btn');
+  // Mark as sign-in mode so authSubmit knows not to create a new account
+  window._riderMode = 'signin';
+}
+
+function showRiderRegister(){
+  // New rider — needs phone only; name + docs collected after in renderRiderReg()
+  document.getElementById('at').textContent='NEW RIDER';
+  document.getElementById('as').textContent='Enter your phone number to create an account';
+  document.getElementById('af').innerHTML=buildFields('phone');
+  const contBtn = document.getElementById('auth-btn');
+  if(contBtn){ contBtn.style.display='block'; contBtn.textContent='Register →'; }
+  setTimeout(()=>document.querySelector('#af input')?.focus(),100);
+  enableEnterKey('auth-btn');
+  window._riderMode = 'register';
 }
 
 // ── OTP VERIFICATION ──────────────────────────────────────────────────────────
@@ -458,19 +505,29 @@ async function authSubmit() {
    user = { name, phone: F.norm(raw) };
  }
 
- btn.innerHTML='Continue →'; btn.disabled=false;
+ // CORRECT — OTP only for new customers
+const isReturning = !!localStorage.getItem('kfc_user');
 
- // Send OTP — proceed to launchCustomer only after verified
- sendOtpAndVerify(user.phone, async () => {
-   const isReturning = !!localStorage.getItem('kfc_user');
-   localStorage.setItem('kfc_user', JSON.stringify(user));
-   toast(isReturning ? `Welcome back, ${user.name}! 👋` : `Account created! Welcome, ${user.name}! 🍗`,'ok');
-   await apiFetch('/api/customer/login',{method:'POST',body:{phone:user.phone,name:user.name}});
-   const otpRes = await apiFetch('/api/auth/send-otp', {method:'POST', body:{phone:user.phone}});
-   if(!otpRes?.success){ toast('Could not send verification code','err'); return reset(); }
-   launchCustomer();
- });
- return;
+if(isReturning){
+  // Existing customer — skip OTP, log straight in
+  localStorage.setItem('kfc_user', JSON.stringify(user));
+  toast(`Welcome back, ${user.name}! 👋`,'ok');
+  await apiFetch('/api/customer/login',{method:'POST',body:{phone:user.phone,name:user.name}});
+  reset(); launchCustomer();
+  return;
+}
+
+// New customer — verify phone with OTP first
+btn.innerHTML='Continue →'; btn.disabled=false;
+sendOtpAndVerify(user.phone, async () => {
+  localStorage.setItem('kfc_user', JSON.stringify(user));
+  toast(`Account created! Welcome, ${user.name}! 🍗`,'ok');
+  await apiFetch('/api/customer/login',{method:'POST',body:{phone:user.phone,name:user.name}});
+  launchCustomer();
+});
+return;
+
+
 }
 
      else if(role==='rider'){
@@ -478,39 +535,47 @@ async function authSubmit() {
         if(!raw||raw.replace(/\D/g,'').length<9){ toast('Enter a valid phone number','err'); return reset(); }
         user.phone=F.norm(raw);
 
-        btn.innerHTML='Continue →'; btn.disabled=false;
-
-        // Send OTP — proceed to launchRider only after verified
-        sendOtpAndVerify(user.phone, async () => {
+        // ── SIGN IN mode — no OTP needed, just look up their account ──────
+        if(window._riderMode === 'signin'){
           const data=await apiFetch('/api/rider/login',{method:'POST',body:{phone:user.phone}});
-          // FIX: handle unregistered rider — backend returns { exists: false }
-          if(data?.exists === false){
-            toast('No rider account found for this number. Please register first.','err',7000);
-            screen('s-landing');
-            return;
-          }
-          // Block pending/suspended riders before launching dashboard
-          if(!data || data.error){
-            const msg = data?.error || 'Login failed. Contact KFC Narok.';
-            toast(msg,'err',6000);
-            screen('s-landing');
-            return;
+
+          if(data?.exists === false || !data){
+            toast('No rider account found. Tap "New Rider — Register" to create one.','err',7000);
+            reset(); return;
           }
           if(data.status === 'pending'){
             toast('Your application is under review. You will be notified within 24 hours.','warn',8000);
-            screen('s-landing');
-            return;
+            reset(); screen('s-landing'); return;
           }
           if(data.status === 'suspended'){
-            toast('Your account has been suspended. Contact KFC Narok.','err',8000);
-            screen('s-landing');
+            toast('Your account has been suspended. Contact KFC Narok on 0702 923 826.','err',8000);
+            reset(); screen('s-landing'); return;
+          }
+          // Approved rider — restore full state and go to dashboard
+          riderState={...riderState,...data,phone:user.phone};
+          localStorage.setItem('kfc_rider',JSON.stringify({phone:user.phone}));
+          toast(`Welcome back, ${data.name}! 🏍️`,'ok');
+          reset(); launchRider();
+          return;
+        }
+
+        // ── REGISTER mode — send OTP to verify phone first ────────────────
+        btn.innerHTML='Continue →'; btn.disabled=false;
+
+        sendOtpAndVerify(user.phone, async () => {
+          const data=await apiFetch('/api/rider/login',{method:'POST',body:{phone:user.phone}});
+
+          if(data && data.status){
+            // Phone already has an account — redirect to sign in
+            toast('This number already has a rider account. Please Sign In instead.','warn',6000);
+            showRiderSignIn();
             return;
           }
-          riderState={...riderState,...data,phone:user.phone};
-          const isReturning=!!localStorage.getItem('kfc_rider');
-          localStorage.setItem('kfc_rider',JSON.stringify({phone:user.phone}));
-          toast(isReturning?`Welcome back! 🏍️`:`Welcome, Rider! 🏍️`,'ok');
-          launchRider();
+          // No account yet — go to registration steps
+          riderState.phone = user.phone;
+          localStorage.setItem('kfc_rider', JSON.stringify({phone:user.phone}));
+          toast('Phone verified! Complete your registration 🏍️','ok');
+          launchRider(); // launchRider checks !riderState.name → renderRiderReg
         });
         return;
 
@@ -1055,11 +1120,25 @@ function showTracking(oid){
 }
 
 async function loadHistory(){
-  const data = await apiFetch('/api/orders/history');
+  const data = await apiFetch('/api/customer/orders');
   const orders = data?.orders || [];
   document.getElementById('hist-list').innerHTML = orders.length
-  ? orders.map(o=>orderRow(o)).join('')
-  : '<div class="empty"><div class="ei">📋</div><h3>NO ORDERS YET</h3><p>Your order history will appear here</p></div>';
+    ? orders.map(o => historyRow(o)).join('')
+    : '<div class="empty"><div class="ei">📋</div><h3>NO ORDERS YET</h3><p>Your order history will appear here</p></div>';
+}
+
+function historyRow(o){
+  const items = (o.items||[]).slice(0,2).map(i=>i.name).join(', ') + (o.items?.length>2?'…':'');
+  return `<div class="o-row">
+    <div class="or-l">
+      <div class="or-num">${o.order_number}</div>
+      <div class="or-m">${items} · ${o.customer_area||'Narok'} · ${F.date(o.created_at)}</div>
+    </div>
+    <div class="or-r">
+      <div class="or-p">${F.money(o.food_amount)}</div>
+      <span class="badge ${F.badge(o.status)}" style="margin-top:3px">${F.status(o.status)}</span>
+    </div>
+  </div>`;
 }
 
 async function renderTracking(oid) {
@@ -1076,16 +1155,16 @@ async function renderTracking(oid) {
   }
   
   const steps = [
-    {lbl:'Paid', match:['paid','cooking','ready','rider_assigned','picked_up','delivered']},
-    {lbl:'Cooking', match:['cooking','ready','rider_assigned','picked_up','delivered']},
-    {lbl:'On way', match:['picked_up','delivered']},
-    {lbl:'Done', match:['delivered']},
+    {lbl:'Order Placed', match:['pending','paid','cooking','ready','rider_assigned','picked_up','delivered']},
+    {lbl:'Cooking',      match:['cooking','ready','rider_assigned','picked_up','delivered']},
+    {lbl:'On way',       match:['picked_up','delivered']},
+    {lbl:'Done',         match:['delivered']},
   ];
   
   const ai = steps.findLastIndex(s => s.match.includes(o.status));
   
-  // Add rider selection for paid orders
-  const riderSection = o.status === 'paid' ? `
+  // Add rider selection for pending and paid orders (manual payment flow — customer has already paid)
+  const riderSection = (o.status === 'pending' || o.status === 'paid') && !o.rider_name ? `
     <div class="card" style="margin-top:11px">
       <div class="card-t">🚴 CHOOSE YOUR RIDER</div>
       <p style="font-size:.8rem;color:var(--muted);margin-bottom:12px">Select a rider to deliver your order</p>
@@ -1139,7 +1218,7 @@ async function renderTracking(oid) {
       `}
       ${riderSection}
       ${assignedRider}
-      ${['paid','cooking','ready','rider_assigned','picked_up'].includes(o.status) ? `
+      ${['pending','paid','cooking','ready','rider_assigned','picked_up'].includes(o.status) ? `
         <button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="openChat(${o.id},'customer')">💬 Chat with Rider</button>
       ` : ''}
       <div class="card">
@@ -1168,8 +1247,8 @@ async function renderTracking(oid) {
     ` : ''}
   `;
   
-  // Load available riders if order is paid
-  if (o.status === 'paid') {
+  // Load available riders if order is pending or paid (before rider is assigned)
+  if ((o.status === 'pending' || o.status === 'paid') && !o.rider_name) {
     loadAvailableRiders(oid);
   }
 }
@@ -1792,9 +1871,13 @@ function orderRow(o){
 
 async function markOrderPaid(num, id) {
   if(!confirm(`Confirm payment received for ${num}?`)) return;
-  await apiFetch(`/api/admin/orders/${id}/mark-paid` ,{method:'POST'});
-  toast(`${num} marked as paid ✅`,'ok')
-  renderAdminOrders();
+  const result = await apiFetch(`/api/admin/orders/${id}/mark-paid`, {method:'POST'});
+  if(result?.success){
+    toast(`${num} marked as paid ✅`, 'ok');
+    await renderAdminOrders(); // await so list refreshes after backend confirms
+  } else {
+    toast(`Could not mark ${num} as paid — try again`, 'err');
+  }
 }
 
 
