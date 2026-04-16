@@ -437,7 +437,6 @@ async function loginCustomer() {
 
 // Customer Registration
 function showCustomerRegister() {
-  document.getElementById('ai').textContent = cfg.icon;
   document.getElementById('at').textContent = 'CREATE ACCOUNT';
   document.getElementById('as').textContent = 'Join MotoBite and start ordering';
   document.getElementById('af').innerHTML = `
