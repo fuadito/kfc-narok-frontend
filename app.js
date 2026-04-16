@@ -1,8 +1,7 @@
 // CONFIG
 const API = window.location.hostname === 'localhost'
 ? 'http://localhost:3000'
-: 'https://kfc-narok-backend-production.up.railway.app'; // updated
-
+:
 // SUPABASE AUTH
 const SUPA_URL = 'https://cylzuyhdnuvmhfjudsmf.supabase.co'; 
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN5bHp1eWhkbnV2bWhmanVkc21mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxNzQzNTMsImV4cCI6MjA4ODc1MDM1M30.PlZuSv0TPTvogkcMPdGFsjMugLpAPmq80E3gk_nxNns';
@@ -25,6 +24,22 @@ let chatMyRole = null;
 let chatMsgs = [];
 let chatChannel = null;
 let _catObserver = null;
+
+// Calculate distance between two GPS coordinates in kilometers
+function haversine(lat1, lng1, lat2, lng2) {
+  const R = 6371; // Earth's radius in kilometers
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const distance = R * c;
+  
+  return distance;
+}
 
 // DEMO DATA for admin and history fallback
 const DEMO_ORDERS_A = [];
@@ -1073,10 +1088,13 @@ if(!amountPaid || amountPaid < orderTotal){
     ...item,
     price: item.price + Object.values(item.addOns||{}).reduce((s,a)=>s+a.price,0)
   }));
+
   const order=await apiFetch('/api/orders',{method:'POST',body:{
     items:orderItems,notes,location:userLoc,
     mpesa_reference:`${mpesaName} · KES ${amountPaid}`
   }});
+
+  
 
   // If order creation failed — stop here, show error, let customer try again
   if(!order?.id){
@@ -1096,18 +1114,52 @@ if(!amountPaid || amountPaid < orderTotal){
     // STK push was sent — highlight the phone prompt
     if(stkBox)  stkBox.style.display='block';
     if(manualPay) manualPay.style.display='none';
-    btn.innerHTML='📱 Waiting for M-Pesa payment...'; btn.disabled=true;
+    btn.innerHTML='📱 q1  Waiting for M-Pesa payment...'; btn.disabled=true;
     toast('Check your phone — M-Pesa prompt sent! 📱','ok',6000);
   } else {
     // STK not yet live — manual payment flow
-    btn.innerHTML='✅ I Have Paid — Place Order'; btn.disabled=false;
-    toast('Order placed!📱','ok',5000);
+btn.innerHTML = '✅ Confirm Payment';
+btn.disabled = false;
+// Change button to confirm payment instead of creating new order
+btn.onclick = () => confirmPayment(oid);
+toast('Order placed! Pay via M-Pesa, then click "Confirm Payment" 📱', 'ok', 5000);
+
+// go to tracking immediately, status updates when payment is done
+cart = []; 
+updateCartUI();
+showTracking(oid);
+
+}
+
+// Customer confirms they have paid via M-Pesa
+async function confirmPayment(orderId) {
+  const btn = document.getElementById('pay-btn');
+  if (!btn) return;
+  
+  // Confirm with user
+  if (!confirm('Have you completed the M-Pesa payment?')) return;
+  
+  btn.innerHTML = '<span class="spin"></span> Confirming payment...';
+  btn.disabled = true;
+  
+  const res = await apiFetch(`/api/orders/${orderId}/confirm-payment`, {
+    method: 'PUT'
+  });
+  
+  if (res?.success) {
+    toast('✅ Payment confirmed! Your order is being prepared.', 'ok');
+    
+    // Update order status
+    active0Id = orderId;
+    localStorage.setItem('kfc_active_order', orderId);
+    
+    // Refresh tracking to show updated status
+    showTracking(orderId);
+  } else {
+    toast(res?.error || '❌ Failed to confirm payment. Try again.', 'err');
+    btn.innerHTML = '✅ I Have Paid';
+    btn.disabled = false;
   }
-
- // go to tracking immediately, status updates when payment is done
- cart=[]; updateCartUI();
- showTracking(oid);
-
 }
 
 function showTracking(oid){
@@ -1252,41 +1304,44 @@ async function renderTracking(oid) {
     loadAvailableRiders(oid);
   }
 }
-
 // Load available riders and display them
 async function loadAvailableRiders(orderId) {
   const list = document.getElementById('rider-list');
   if (!list) return;
   
-  // FIX: correct URL — route is under /api/rider, not /api/riders
+  // Correct URL — route is /api/rider/available
   const riders = await apiFetch('/api/rider/available');
   
-  if (!riders?.length) {
-    list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted)">No riders available. Trying again...</div>';
+  if (!riders || riders.length === 0) {
+    list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted)">No riders available right now. Please try again in a moment...</div>';
+    // Retry after 10 seconds
+    setTimeout(() => loadAvailableRiders(orderId), 10000);
     return;
   }
   
   list.innerHTML = riders.map(r => `
-    <div class="rider-select" onclick="selectRider('${orderId}', '${r.phone}', this)" style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--dark3);border-radius:8px;margin-bottom:8px;cursor:pointer;border:1.5px solid transparent">
+    <div class="rider-select" onclick="selectRider(${orderId}, '${r.phone}', this)" style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--dark3);border-radius:8px;margin-bottom:8px;cursor:pointer;border:1.5px solid transparent;transition:all 0.2s">
       <div style="font-size:1.8rem">🏍️</div>
       <div style="flex:1">
         <div style="font-weight:600">${r.name}</div>
         <div style="font-size:.75rem;color:var(--muted)">⭐ ${r.rating || 'New'} · ${r.total_deliveries || 0} deliveries</div>
       </div>
-      <div style="color:var(--green)">Select →</div>
+      <div style="color:var(--green);font-size:0.9rem">Select →</div>
     </div>
   `).join('');
 }
 
+
 // Customer selects a rider
-async function selectRider(orderId, riderPhone, el) { // FIX: accept element directly — event.target is unreliable
+async function selectRider(orderId, riderPhone, el) {
+   console.log('✅ selectRider called:', orderId, riderPhone);
   if (!confirm('Assign this rider to your order?')) return;
   
   if(el) el.innerHTML = '<span class="spin"></span> Assigning...';
   
-  // FIX: route is under /api/rider, not /api/orders
-  const res = await apiFetch(`/api/rider/${orderId}/assign-rider`, {
-    method: 'POST',
+  // ✅ FIXED: Correct route is /api/orders/:id/assign-rider with PUT method
+  const res = await apiFetch(`/api/orders/${orderId}/assign-rider`, {
+    method: 'PUT',  // ← Changed from POST to PUT
     body: { rider_phone: riderPhone }
   });
   
@@ -1294,7 +1349,7 @@ async function selectRider(orderId, riderPhone, el) { // FIX: accept element dir
     toast('Rider assigned! They will contact you. 🚴', 'ok');
     renderTracking(orderId); // Refresh to show assigned rider
   } else {
-    toast('Failed to assign rider. Try again.', 'err');
+    toast(res?.error || 'Failed to assign rider. Try again.', 'err');
     loadAvailableRiders(orderId);
   }
 }
@@ -1310,12 +1365,7 @@ async function submitRating(){
     const rc=document.getElementById('rating-card');
     if(rc) rc.innerHTML='<div style="text-align:center;padding:14px"><div style="font-size:2rem">🙏</div><p style="font-family:var(--fh);letter-spacing:1px;margin-top:8px">THANK YOU!</p><p style="font-size:.82rem;color:var(--muted)">Your feedback helps us improve</p></div>';
   toast('Rating submitted! Thank you 🙏','ok');
-}
-// Customer Location vs KFC Narok Location, R = Earth's radius(in km), dL = difference in latitude (converted from degree to radians in Trigonometry), dG = longitude difference  //     
-function haversine(a,b,c,d){ const R=6371,dL=(c-a)*Math.PI/180,dG=(d-b)*Math.PI/180,x=Math.sin(dL/2)**2+Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(dG/2)**2; return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x)); }
-                                                                             // sine of half the latitude difference, squared. cosine of the first latitude(customer), cosine of second lattitude(KFC NAROK) sine of of half longitude difference squared. **2 = power of 2 
-// Take two points on a sphere, figure out the angle between them accounting for Earth's curvature, then multiply by Earth's radius to get the real-world distance in kilometres.  
-
+}     
 
 
 
@@ -1568,7 +1618,7 @@ function showRiderOrderAlert(o){
     let t=180;
     z.innerHTML=`<div class="o-alert">
     <div class="oa-top"><div class="oa-title">🔔 NEW ORDER!</div><div class="oa-timer" id="ot">${fmtTime(t)}</div></div>
-    <div class="oa-detail">📍 Collect: KFC Narok, Kenyatta Rd</div>
+    <div class="oa-detail">📍 Collect: KFC Narok</div>
     <div class="oa-detail">📍 Deliver to: ${o.customer_area}</div>
     <div class="oa-detail">💰 Your fee: Agree with the customer</div>
     <div class="oa-items">${(o.items||[]).map(i=>`• ${i.name}${i.note?` (${i.note})`:''}`).join('<br>')}</div>
@@ -2186,7 +2236,7 @@ function startRiderRealtime(){
     })
     .subscribe();
 
-    supa.channel('order-chat-'+activeOrderId)
+    supa.channel('order-chat-'+active0Id)
   .on('broadcast',{event:'chat_request'},({payload})=>{
     toast(`💬 ${payload.customerName} wants to chat about delivery fee!`,'ok',6000);
     playBeep();
@@ -2329,4 +2379,5 @@ function renderChatMessages(){
     </div>`;
   }).join('');
   el.scrollTop=el.scrollHeight;
+}
 }
