@@ -1,7 +1,7 @@
 // CONFIG
 const API = window.location.hostname === 'localhost'
 ? 'http://localhost:3000'
-:
+: 'https://motobite-api.onrender.com'
 // SUPABASE AUTH
 const SUPA_URL = 'https://cylzuyhdnuvmhfjudsmf.supabase.co'; 
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN5bHp1eWhkbnV2bWhmanVkc21mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxNzQzNTMsImV4cCI6MjA4ODc1MDM1M30.PlZuSv0TPTvogkcMPdGFsjMugLpAPmq80E3gk_nxNns';
