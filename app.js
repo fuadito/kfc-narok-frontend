@@ -559,7 +559,8 @@ async function sendOtpAndVerify(phone, onSuccess) {
 
   const res = await apiFetch('/api/auth/send-otp', { method:'POST', body:{ phone } });
   if(!res?.success){
-    toast('Could not send verification code. Try again.','err');
+    const errMsg = res?.error || 'Could not send verification code. Try again';
+    toast(errMsg,'err');
     return;
   }
   toast('Code sent! Check your SMS 📱','ok');
