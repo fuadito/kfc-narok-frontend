@@ -631,7 +631,7 @@ async function authSubmit() {
    }
    try {
      const u = JSON.parse(saved);
-     const normalized = toE164(raw);
+     const normalized = F.norm(raw);
      if(u.phone !== normalized){
        toast('Phone number not recognized.','err');
        return reset();
@@ -647,7 +647,7 @@ async function authSubmit() {
      toast('Enter your full name','err');
      return reset();
    }
-   user = { name, phone: toE164(raw) };
+   user = { name, phone: F.norm(raw) };
  }
 
  // CORRECT — OTP only for new customers
@@ -678,7 +678,7 @@ return;
      else if(role==='rider'){
  const raw=document.getElementById('f-phone')?.value.trim();
         if(!raw||raw.replace(/\D/g,'').length<9){ toast('Enter a valid phone number','err'); return reset(); }
-        user.phone=toE164(raw);
+        user.phone = F.norm(raw);
 
         // ── SIGN IN mode — no OTP needed, just look up their account ──────
         if(window._riderMode === 'signin'){
@@ -1154,9 +1154,9 @@ function removeCartItem(i){
     err.classList.add('hidden');
     navigator.geolocation.getCurrentPosition(async pos=>{
       const {latitude:lat,longitude:lng}=pos.coords;
-      const dist=haversine(lat,lng,-1.0833,35.8667);
-      if(dist>170){
-          err.textContent=`❌ You're ${dist.toFixed(1)}km from KFC Narok. We only deliver within 170km.`;
+      const dist=haversine(lat,lng,-1.0907,35.8710);
+      if(dist>110){
+          err.textContent=`❌ You're ${dist.toFixed(1)}km from KFC Narok. We only deliver within 110km.`;
           err.classList.remove('hidden'); btn.innerHTML='📍 Try Again'; btn.disabled=false; return;
       }
 
@@ -1172,7 +1172,8 @@ function removeCartItem(i){
         const a = gd.address || {};
         // Build area string from most specific to least specific
         // e.g. "Narok Town", "Nakuru CBD", "Naivasha"
-        areaName = a.suburb || a.village || a.town || a.city_district || a.city || a.county || 'Narok Town';
+        // CORRECT — add township before suburb since Narok uses township
+        areaName = a.township || a.suburb || a.village || a.town || a.city_district || a.city || a.county || 'Narok Town';
       } catch(e) {
         console.warn('Reverse geocode failed — using default area name');
       }
@@ -1992,6 +1993,17 @@ function playBeep(){
 function launchAdmin(){
   screen('s-admin');
   renderAdminOverview();
+
+  // ADD — auto-refresh orders when any order status changes
+  supa.channel('admin-orders-watch')
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'orders'},()=>{
+      // Only refresh if currently on orders tab
+      if(document.getElementById('ap-orders')?.classList.contains('on')){
+        renderAdminOrders();
+      }
+      renderAdminOverview(); // always refresh stats
+    })
+    .subscribe();
 }
 
 function aTab(id,btn){
@@ -2276,6 +2288,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   if(session){
     role = 'admin';
     launchAdmin();
+    return;
+  }
+
+  supa.auth.onAuthStateChange((event, session) => {
+  if(event === 'SIGNED_IN' && role !== 'admin'){
+    role = 'admin';
+    launchAdmin();
+  }
+  if(event === 'SIGNED_OUT'){
+    role = null;
+    screen('s-landing');
   }
 });
 
