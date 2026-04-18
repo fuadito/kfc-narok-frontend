@@ -259,7 +259,7 @@ const F = {
     money: a=>`KES ${Number(a).toLocaleString()}`,
     date: d=>new Date(d).toLocaleString('en-KE',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}),
     phone: p=>{ const l=p.startsWith('254')?'0'+p.slice(3):p; return l.replace(/(\d{4})(\d{3})(\d{3})/,'$1 $2 $3'); },
-    norm: p=>{ const d=p.replace(/\D/g,''); return d.startsWith('254')?d:d.startsWith('0')?'254'+d.slice(1):'254'+d; },
+    norm: p=>{ const d=p.replace(/\D/g,''); return d.startsWith('254')?`+${d}`:d.startsWith('0')?`+254${d.slice(1)}`:`+254${d}`; },
     age: d=>{ const m=Math.floor((Date.now()-new Date(d))/60000); return m<60?`${m}m`:`${Math.floor(m/60)}h`; },
     status: s=>({pending:'Awaiting payment',awaiting_payment:'Awaiting payment', paid:'Payment confirmed',cooking:'Being prepared',ready:'Ready!',rider_assigned:'Rider on way', picked_up:'Out for delivery',delivered:'Delivered ✓',cancelled:'Cancelled'})[s]||s,
     badge: s=>({pending:'b-muted', awaiting_payment:'b-muted',paid:'b-blue',cooking:'b-orange',ready:'b-orange',rider_assigned:'b-blue',picked_up:'b-blue',delivered:'b-green',cancelled:'b-red'})[s]||'b-muted',
@@ -738,12 +738,6 @@ return;
   }
 }
 
-
-
-
-function goLanding(){
-    screen('s-landing');
-}
 function exitRole(){
   role=null; cart=[]; active0Id=null; foodR=0; riderR=0;
   kDone=0; kOrders=[];
@@ -751,6 +745,13 @@ function exitRole(){
   if(_locInterval){ clearInterval(_locInterval); _locInterval=null; }
   riderState={name:'',phone:'',rating:0,deliveries:0,online:false,regStep:0,regData:{},activeOrder:null,collected:false,todayTrips:0,todayEarnings:0};
   localStorage.removeItem('kfc_kitchen');
+
+  // If user arrived via ?role= URL — return to that role's login, not landing
+  const urlRole = new URLSearchParams(window.location.search).get('role');
+  if(urlRole === 'kitchen'){ selectRole('kitchen'); return; }
+  if(urlRole === 'rider'){   selectRole('rider');   return; }
+  if(urlRole === 'admin'){   screen('s-admin-login'); return; }
+
   screen('s-landing');
 }
 
@@ -2307,8 +2308,12 @@ async function adminSignOut() {
     await supa.auth.signOut();
     if(window._adminInterval) clearInterval(window._adminInterval);
     role = null;
-    screen('s-landing');
     toast('signed out');
+
+    const urlRole = new URLSearchParams(window.location.search).get('role');
+    if(urlRole === 'admin'){ screen('s-admin-login'); return; }
+
+  screen('s-landing');
 }
 
 // SUPABASE REALTIME — KITCHEN
