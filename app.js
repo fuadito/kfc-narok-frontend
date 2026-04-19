@@ -749,6 +749,7 @@ function exitRole(){
   kDone=0; kOrders=[];
   if(kInterval){ clearInterval(kInterval); kInterval=null; }
   if(_locInterval){ clearInterval(_locInterval); _locInterval=null; }
+  if(_clockInterval){ clearInterval(_clockInterval); _clockInterval=null; }
   riderState={name:'',phone:'',rating:0,deliveries:0,online:false,regStep:0,regData:{},activeOrder:null,collected:false,todayTrips:0,todayEarnings:0};
   localStorage.removeItem('kfc_kitchen');
 
@@ -1252,6 +1253,7 @@ if(!amountPaid || amountPaid < orderTotal){
     // STK push was sent — highlight the phone prompt
     if(stkBox)  stkBox.style.display='block';
     if(manualPay) manualPay.style.display='none';
+    cart = []; updateCartUI(); // clear cart when STK push sent
     btn.innerHTML='📱 Waiting for M-Pesa payment...'; btn.disabled=true;
     toast('Check your phone — M-Pesa prompt sent! 📱','ok',6000);
   } else {
@@ -1288,11 +1290,12 @@ async function confirmPayment(orderId) {
   
   if (res?.success) {
     toast('✅ Payment confirmed! Your order is being prepared.', 'ok');
-    
+    // Clear cart and hide float so "View Order" button disappears
+    cart = [];
+    updateCartUI();
     // Update order status
     active0Id = orderId;
     localStorage.setItem('kfc_active_order', orderId);
-    
     // Refresh tracking to show updated status
     showTracking(orderId);
   } else {
@@ -1414,9 +1417,6 @@ async function renderTracking(oid) {
       `}
       ${riderSection}
       ${assignedRider}
-      ${['pending','paid','cooking','ready','rider_assigned','picked_up'].includes(o.status) ? `
-        <button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="openChat(${o.id},'customer')">💬 Chat with Rider</button>
-      ` : ''}
       <div class="card">
         <div class="card-t">ORDER SUMMARY</div>
         ${(o.items||[]).map(i => `
@@ -1785,11 +1785,12 @@ function fmtTime(s){ return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}
 
 function acceptOrder(){
   if(oTimer) clearInterval(oTimer);
-  apiFetch(`/api/orders/${riderState.activeOrder.id}/accept`, {method:'POST'});
-  
-  // ADD — persist active order so it survives refresh
+  const orderId = riderState.activeOrder?.id;
+  apiFetch(`/api/orders/${orderId}/accept`, {method:'POST'});
+  // Persist active order so it survives refresh
   localStorage.setItem('kfc_active_delivery', JSON.stringify(riderState.activeOrder));
-  
+  // Start chat listener now that we have an order — fixes Issue 8
+  startRiderChatListener(orderId);
   toast('Order accepted! Head to KFC Narok 🏍️','ok');
   document.getElementById('r-alert-zone').innerHTML='';
   riderState.collected=false;
@@ -1928,7 +1929,8 @@ function startLocTracking(){
 
 // KITCHEN APP
 let kInterval=null;
-let _locInterval=null; // FIX: track location interval so it can be cleared on re-toggle
+let _locInterval=null;
+let _clockInterval=null; // FIX: track location interval so it can be cleared on re-toggle
 
 function launchKitchen(){
   screen('s-kitchen');
@@ -1941,11 +1943,12 @@ function launchKitchen(){
 }
 
 function startClock(){
+  if(_clockInterval){ clearInterval(_clockInterval); _clockInterval=null; }
   const tick=()=>{
     const el=document.getElementById('k-clock');
     if(el) el.textContent=new Date().toLocaleTimeString('en-KE',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false,timeZone:'Africa/Nairobi'});
   };
-  tick(); setInterval(tick,1000);
+  tick(); _clockInterval=setInterval(tick,1000);
 }
 
 async function pollKitchen(){
@@ -1988,7 +1991,10 @@ const ageMins = Math.floor((Date.now()-new Date(baseTime))/60000);
     : `<div style="font-size:.7rem;color:var(--green);margin-bottom:6px">✅ PAID — Ready to cook</div>
        <button class="kb cook" onclick="kUpdate(${o.id},'cooking')">🔥 Start Cooking</button>`,
   cook:`<button class="kb rdy" onclick="kUpdate(${o.id},'ready')">✅ Mark Ready</button>`,
-  rdy:`<div class="kb wait">${o.status==='rider_assigned'?'🏍️ Rider Assigned':'⏳ Awaiting Rider'}</div>`
+  rdy:`<div>${o.status==='rider_assigned'
+    ? '<div class=\"kb wait\">🏍️ Rider Assigned</div>'
+    : '<div class=\"kb wait\">⏳ Awaiting Rider</div><button class=\"kb cook\" style=\"margin-top:6px;font-size:.75rem\" onclick=\"kRedispatch('+o.id+')\" >🔄 Re-dispatch</button>'
+  }</div>`
 }[type];
   return  `<div class="kc" id="kc-${o.id}">
      <div class="kc-top"><div class="kc-num">${o.order_number}</div><div class="kc-age${urgent?' urg':''}">⏱ ${ageMins}m</div></div>
@@ -2008,6 +2014,14 @@ async function kUpdate(id,status){
   await apiFetch(`/api/kitchen/orders/${id}/status`,{method:'POST',body:{status}});
   if(status==='ready') toast('Order ready! Notifying rider 🏍️','ok');
   playBeep();
+}
+
+async function kRedispatch(id){
+  toast('Re-dispatching to available riders...','ok',3000);
+  const r = await apiFetch(`/api/kitchen/orders/${id}/status`,{method:'POST',body:{status:'ready'}});
+  if(r?.success) toast('Re-dispatched! ✅','ok');
+  else toast('Re-dispatch failed — try again','err');
+  await pollKitchen();
 }
 
 function playBeep(){
@@ -2263,6 +2277,7 @@ async function toggleMenuItem(id,el) {
 document.addEventListener('DOMContentLoaded', async () => {
   const saved = localStorage.getItem('kfc_user');
   if(saved){ try{ user=JSON.parse(saved); }catch{} }
+  loadChatMsgs(); // restore chat history across sessions
 
   const urlRole = new URLSearchParams(window.location.search).get('role');
   if(urlRole === 'kitchen'){ selectRole('kitchen'); return; }
@@ -2285,7 +2300,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       const data = await apiFetch('/api/rider/login',{method:'POST',body:{phone:rd.phone}});
       if(data && data.name && data.status === 'approved'){
         riderState = {...riderState, ...data, phone:rd.phone};
-        role = 'rider'; launchRider(); return;
+        role = 'rider'; launchRider();
+        // Restore chat listener if rider had an active order before refresh
+        if(riderState.activeOrder?.id) startRiderChatListener(riderState.activeOrder.id);
+        return;
       } else {
         localStorage.removeItem('kfc_rider');
       }
@@ -2405,16 +2423,30 @@ function startRiderRealtime(){
     })
     .subscribe();
 
-    // use rider's active order
-const activeOrderId = riderState.activeOrder?.id;
-if(activeOrderId){
-  supa.channel('order-chat-'+activeOrderId)
+}
+
+// Rider background chat listener — call from acceptOrder so it runs when an order exists
+function startRiderChatListener(orderId){
+  if(!orderId) return;
+  supa.channel('order-chat-'+orderId).unsubscribe().catch(()=>{});
+  supa.channel('order-chat-'+orderId)
     .on('broadcast',{event:'chat_request'},({payload})=>{
-      toast(`💬 ${payload.customerName} wants to chat!`,'ok',6000);
-      playBeep();
+      if(!document.getElementById('chat-sheet')?.classList.contains('on')){
+        toast(`💬 ${payload.customerName} wants to chat!`,'ok',6000);
+        playBeep();
+      }
+    })
+    .on('broadcast',{event:'msg'},({payload})=>{
+      if(!chatMsgs[orderId]) chatMsgs[orderId]=[];
+      chatMsgs[orderId].push(payload);
+      saveChatMsgs();
+      // Only show toast if chat sheet not open for this order
+      if(chatOrderId !== orderId || !document.getElementById('chat-sheet')?.classList.contains('on')){
+        toast(`💬 ${payload.name}: ${payload.text.slice(0,40)}${payload.text.length>40?'…':''}`, 'ok', 4000);
+        playBeep();
+      }
     })
     .subscribe();
-}
 }
 
 // SUPABASE REALTIME — CUSTOMER ORDER TRACKING
@@ -2428,12 +2460,34 @@ function startOrderRealtime(oid){
     },()=>{
       renderTracking(oid);
     })
+    // Background chat listener — notifies customer when rider sends a msg while chat is closed
+    .on('broadcast',{event:'msg'},({payload})=>{
+      if(!chatMsgs[oid]) chatMsgs[oid]=[];
+      chatMsgs[oid].push(payload);
+      saveChatMsgs();
+      // Only show toast if chat sheet isn't open for this order
+      if(chatOrderId !== oid || !document.getElementById('chat-sheet')?.classList.contains('on')){
+        toast(`💬 ${payload.name}: ${payload.text.slice(0,40)}${payload.text.length>40?'…':''}`, 'ok', 4000);
+        playBeep();
+      }
+    })
     .subscribe();
 }
 
 // RIDER ↔ CUSTOMER CHAT  (delivery fee negotiation)
 // Uses Supabase Realtime broadcast — no extra DB table required.
 // Channel name: order-chat-{orderId}
+
+// Chat persistence helpers — save/load keyed by orderId
+function saveChatMsgs(){
+  try{ localStorage.setItem('mb_chat', JSON.stringify(chatMsgs)); }catch{}
+}
+function loadChatMsgs(){
+  try{
+    const raw = localStorage.getItem('mb_chat');
+    if(raw) chatMsgs = JSON.parse(raw);
+  }catch{}
+}
 
 function ensureChatSheet(){
   if(document.getElementById('chat-sheet')) return;
@@ -2533,6 +2587,7 @@ async function sendChatMsg(){
   };
   if(!chatMsgs[chatOrderId]) chatMsgs[chatOrderId]=[];
   chatMsgs[chatOrderId].push(msg);
+  saveChatMsgs(); // persist before broadcast
   renderChatMessages();
   // Broadcast to the other side
   if(chatChannel){
