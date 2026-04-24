@@ -14,7 +14,7 @@ let cart = [];
 let userLoc = null;
 let active0Id = null;
 let foodR = 0, riderR = 0;
-let riderState = {name:'', phone:'', rating:0, deliveries:0, online:false, regStep:0, regData:{}, activeOrder:null, collected:false, todayTrips:0, todayEarnings:0, agreedFee:0, earningsLog:[]};
+let riderState = {name:'', phone:'', rating:0, deliveries:0, online:false, regStep:0, regData:{}, activeOrder:null, collected:false, todayTrips:0, todayEarnings:0};
 let pinBuf ='';
 let oTimer = null;
 let kOrders = [];
@@ -24,6 +24,7 @@ let chatMyRole = null;
 let chatMsgs = {};
 let chatChannel = null;
 let _catObserver = null;
+let declinedRiders = new Set();
 
 // Calculate distance between two GPS coordinates in kilometers
 function haversine(lat1, lng1, lat2, lng2) {
@@ -781,16 +782,14 @@ async function launchCustomer(){
 
     renderCats(); renderMenu('Brand New'); updateCartUI();
 
-    // Restore active order on login — always set active0Id so rating can submit
-    const savedOid = localStorage.getItem('kfc_active_order');
+    // Restore active order on login
+      const savedOid = localStorage.getItem('kfc_active_order');
     if(savedOid){
-        active0Id = savedOid; // set early so submitRating has it even before tracking loads
         const order = await apiFetch(`/api/orders/${savedOid}`);
-        if(order && order.status !== 'cancelled'){
-            showTracking(savedOid); // show tracking for all non-cancelled including delivered
-        } else if(!order || order.status === 'cancelled') {
-            active0Id = null;
-            localStorage.removeItem('kfc_active_order');
+        if(order && !['delivered','cancelled'].includes(order.status)){
+            showTracking(savedOid);
+        } else { 
+                   localStorage.removeItem('kfc_active_order');
         }
     }
 }
@@ -1146,7 +1145,7 @@ function renderCartSheet(){
 </div>
     <div class="srow tot"><span>Pay to KFC Till</span><span>${F.money(total)}</span></div>
   </div>`;
-  ac.innerHTML=`<button class="btn btn-primary btn-full btn-lg" onclick="closeCart();cPanel('location')">Confirm Order →</button>
+  ac.innerHTML=`<button class="btn btn-primary btn-full btn-lg" onclick="closeCart();cPanelLocation()">Confirm Order →</button>
   <button class="btn btn-ghost btn-full" style="margin-top:8px;color:var(--red);font-size:.82rem" onclick="cart=[];updateCartUI();closeCart()">🗑 Clear Cart</button>`;
 }
 
@@ -1156,48 +1155,269 @@ function removeCartItem(i){
    if(!cart.length)closeCart(); }
 
 
-   async function getLocation() {
-    const btn=document.getElementById('loc-btn');
-    const err=document.getElementById('loc-err-box');
-    const ok=document.getElementById('loc-ok-box');
-    btn.innerHTML='<span class="spin"></span> Getting location...'; btn.disabled=true;  
-    err.classList.add('hidden');
-    navigator.geolocation.getCurrentPosition(async pos=>{
-      const {latitude:lat,longitude:lng}=pos.coords;
-      const dist=haversine(lat,lng,-1.0907,35.8710);
-      if(dist>50){
-          err.textContent=`❌ You're ${dist.toFixed(1)}km from KFC Narok. We only deliver within 50km.`;
-          err.classList.remove('hidden'); btn.innerHTML='📍 Try Again'; btn.disabled=false; return;
-      }
+ 
+// ── LOCATION MAP PICKER ───────────────────────────────────────────────────────
+// Uses Leaflet + OpenStreetMap — no API key needed.
+// Strategy:
+//   1. Open the section → initialise the map centred on Narok Town
+//   2. Try GPS — if it arrives, move the pin there automatically
+//   3. Customer can drag the pin OR use the search box to correct any inaccuracy
+//   4. "Use This Location" validates distance and stores coordinates in userLoc
 
-       // Reverse geocode — get human-readable area name from coordinates
-      // Uses OpenStreetMap Nominatim ,no API key
-       let areaName = 'Narok Town';
-      try {
-        const geo = await fetch(
-          `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
-          { headers: { 'Accept-Language': 'en' } }
-        );
-        const gd = await geo.json();
-        const a = gd.address || {};
-        // Build area string from most specific to least specific
-        // e.g. "Narok Town", "Nakuru CBD", "Naivasha"
-        // CORRECT — add township before suburb since Narok uses township
-        areaName = a.township || a.suburb || a.village || a.town || a.city_district || a.city || a.county || 'Narok Town';
-      } catch(e) {
-        console.warn('Reverse geocode failed — using default area name');
-      }
+const KFC_LAT =  -1.0907;
+const KFC_LNG =  35.8710;
+const MAX_KM  =  50;
 
-      userLoc={lat,lng,areaName};
-      ok.innerHTML=`<div class="loc-ok"><div class="loc-ok-ico">✅</div><div><div class="loc-ok-t">Location confirmed!</div><div class="loc-ok-s">${dist.toFixed(1)}km from KFC Narok · ${lat.toFixed(4)}, ${lng.toFixed(4)}</div></div></div>`;
-      ok.classList.remove('hidden');
-      btn.textContent='✅ Continue to Payment';
-      btn.onclick=goToPayment;
-      btn.disabled=false;
+let _locMap    = null;  // Leaflet map instance
+let _locMarker = null;  // draggable pin
+let _gpsLat    = null;  // raw GPS coords (may be inaccurate — used for re-centre only)
+let _gpsLng    = null;
 
-    },()=>{ err.textContent='❌ GPS access denied. Enable location and try again.'; err.classList.remove('hidden'); btn.innerHTML='📍 Try Again'; btn.disabled=false; },{enableHighAccuracy:true,timeout:10000});
+// Called when customer taps "Confirm Order →" from cart → opens location panel
+function cPanelLocation(){
+  cPanel('location');
+   if(_locMap){
+    // Map already exists — panel just became visible, fix its size with two
+    // rAFs so the CSS 'on' class has definitely been painted before Leaflet
+    // measures the container dimensions.
+    requestAnimationFrame(() => requestAnimationFrame(() => _locMap.invalidateSize()));
+    return;
+  }
+  setTimeout(initLocMap, 80); // first visit: brief delay for layout
 }
 
+
+function initLocMap(){
+  // If map already initialised — just refresh size and return
+  if(_locMap){
+    _locMap.invalidateSize();
+    return;
+  }
+
+  const container = document.getElementById('loc-map');
+  if(!container) return;
+
+  // Start centred on Narok Town
+  _locMap = L.map('loc-map', { zoomControl: true, attributionControl: false })
+    .setView([KFC_LAT, KFC_LNG], 14);
+
+  // OpenStreetMap tiles — free, no key
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19
+  }).addTo(_locMap);
+
+  // KFC marker (fixed red icon)
+  const kfcIcon = L.divIcon({
+    html: '<div style="background:#e8002d;color:#fff;font-size:11px;font-weight:700;padding:3px 6px;border-radius:6px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.4)">KFC Narok</div>',
+    iconAnchor: [36, 10],
+    className: ''
+  });
+  L.marker([KFC_LAT, KFC_LNG], {icon: kfcIcon}).addTo(_locMap);
+
+  // Customer pin — draggable blue pin, starts on Narok town centre
+  const pinIcon = L.divIcon({
+    html: `<div style="
+      width:32px;height:32px;
+      background:#2979ff;border:3px solid #fff;
+      border-radius:50% 50% 50% 0;
+      transform:rotate(-45deg);
+      box-shadow:0 3px 10px rgba(0,0,0,.4)">
+    </div>`,
+    iconSize:   [32, 32],
+    iconAnchor: [16, 32],
+    className: ''
+  });
+
+  _locMarker = L.marker([KFC_LAT, KFC_LNG], { icon: pinIcon, draggable: true })
+    .addTo(_locMap);
+
+  // Update status bar every time the pin moves
+  _locMarker.on('drag dragend', () => updateLocStatus());
+
+  setLocStatus('🔵 Drag the blue pin to your exact delivery address');
+  enableLocBtn(false);
+
+  // Try GPS — async, non-blocking
+  tryGPS();
+}
+
+function tryGPS(){
+  if(!navigator.geolocation){
+    setLocStatus('⚠️ GPS not available — drag the pin to your location');
+    return;
+  }
+  setLocStatus('<span class="spin"></span>&nbsp; Getting GPS…');
+  navigator.geolocation.getCurrentPosition(
+    pos => onGPSSuccess(pos),
+    err => onGPSFail(err),
+    { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+  );
+}
+
+function onGPSSuccess(pos){
+  const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+  _gpsLat = lat; _gpsLng = lng;
+
+  // Move pin and map to GPS position
+  _locMap.setView([lat, lng], 16);
+  _locMarker.setLatLng([lat, lng]);
+
+  const accText = accuracy < 50  ? '✅ High accuracy'
+                : accuracy < 200 ? '⚠️ Moderate accuracy — drag pin if needed'
+                :                  '⚠️ Low accuracy — drag pin to exact spot';
+  setLocStatus(`${accText} (±${Math.round(accuracy)}m) · Drag pin to correct`);
+  updateLocStatus();
+}
+
+function onGPSFail(err){
+  _gpsLat = null; _gpsLng = null;
+  const msg = err.code === 1
+    ? '🔒 GPS access denied — drag the pin to your location'
+    : '⚠️ GPS unavailable — drag the pin to your location';
+  setLocStatus(msg);
+  // Leave map centred on Narok so customer can still drag
+  enableLocBtn(true); // let them pick manually even without GPS
+}
+
+function recenterOnGPS(){
+  if(_gpsLat){
+    _locMap.setView([_gpsLat, _gpsLng], 17);
+    _locMarker.setLatLng([_gpsLat, _gpsLng]);
+    updateLocStatus();
+  } else {
+    tryGPS();
+  }
+}
+
+function updateLocStatus(){
+  const { lat, lng } = _locMarker.getLatLng();
+  const dist = haversine(lat, lng, KFC_LAT, KFC_LNG);
+
+  if(dist > MAX_KM){
+    setLocStatus(`❌ ${dist.toFixed(1)} km from KFC Narok — outside 50 km delivery zone`);
+    enableLocBtn(false);
+  } else {
+    setLocStatus(`✅ ${dist.toFixed(1)} km from KFC Narok — within delivery zone`);
+    enableLocBtn(true);
+  }
+}
+
+function setLocStatus(html){
+  const el = document.getElementById('loc-status-txt');
+  if(!el) return;
+  el.innerHTML = html;
+}
+
+function enableLocBtn(on){
+  const btn = document.getElementById('loc-btn');
+  if(!btn) return;
+  btn.disabled = !on;
+  btn.style.opacity = on ? '1' : '0.45';
+}
+
+// Called when customer taps "Use This Location"
+async function confirmMapLocation(){
+  const btn = document.getElementById('loc-btn');
+  const errBox = document.getElementById('loc-err-box');
+  if(!_locMarker) return;
+
+  const { lat, lng } = _locMarker.getLatLng();
+  const dist = haversine(lat, lng, KFC_LAT, KFC_LNG);
+
+  errBox.classList.add('hidden');
+
+  if(dist > MAX_KM){
+    errBox.textContent = `❌ You're ${dist.toFixed(1)} km away. We only deliver within ${MAX_KM} km of KFC Narok.`;
+    errBox.classList.remove('hidden');
+    return;
+  }
+
+  btn.innerHTML = '<span class="spin"></span> Confirming…';
+  btn.disabled = true;
+
+  // Reverse geocode to get human-readable area name
+  let areaName = 'Narok Town';
+  try {
+    const geo = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
+      { headers: { 'Accept-Language': 'en' } }
+    );
+    const gd = await geo.json();
+    const a  = gd.address || {};
+    areaName = a.township || a.suburb || a.village || a.town
+             || a.city_district || a.city || a.county || 'Narok Town';
+  } catch { /* keep default */ }
+
+  userLoc = { lat, lng, areaName };
+
+  btn.innerHTML = `✅ ${areaName} confirmed (${dist.toFixed(1)} km)`;
+  btn.disabled  = false;
+  btn.onclick   = goToPayment;
+  setLocStatus(`📍 Delivering to: <strong style="color:var(--white)">${areaName}</strong> · ${dist.toFixed(1)} km from KFC`);
+
+  toast(`📍 Location set: ${areaName}`, 'ok');
+}
+
+// ── LOCATION SEARCH (Nominatim autocomplete) ──────────────────────────────────
+let _locSearchTimer = null;
+
+function locSearchDebounce(){
+  clearTimeout(_locSearchTimer);
+  _locSearchTimer = setTimeout(runLocSearch, 400);
+}
+
+async function runLocSearch(){
+  const q = document.getElementById('loc-search')?.value.trim();
+  const results = document.getElementById('loc-search-results');
+  if(!q || q.length < 3){ if(results) results.style.display='none'; return; }
+
+  try {
+    const res  = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q+' Kenya')}&format=json&limit=5&addressdetails=1`,
+      { headers: { 'Accept-Language': 'en' } }
+    );
+    const data = await res.json();
+
+    if(!results) return;
+    if(!data.length){ results.style.display='none'; return; }
+
+    results.innerHTML = data.map((r,i) => `
+      <div onclick="selectLocResult(${r.lat},${r.lon},'${(r.display_name||'').replace(/'/g,'').slice(0,60)}')"
+        style="padding:10px 14px;font-size:.82rem;cursor:pointer;border-bottom:1px solid var(--line);
+               color:var(--white);transition:background .15s"
+        onmouseover="this.style.background='var(--dark3)'"
+        onmouseout="this.style.background='transparent'">
+        📍 ${(r.display_name||'').slice(0,70)}
+      </div>`).join('');
+    results.style.display = 'block';
+
+  } catch {
+    if(results) results.style.display = 'none';
+  }
+}
+
+function selectLocResult(lat, lng, label){
+  lat = parseFloat(lat); lng = parseFloat(lng);
+  _locMap.setView([lat, lng], 16);
+  _locMarker.setLatLng([lat, lng]);
+  updateLocStatus();
+
+  const inp = document.getElementById('loc-search');
+  if(inp) inp.value = label;
+  const results = document.getElementById('loc-search-results');
+  if(results) results.style.display = 'none';
+}
+
+// ── Legacy getLocation() — kept so any old references still work ──────────────
+function getLocation(){ initLocMap(); }
+
+// Hide search results when clicking outside
+document.addEventListener('click', e => {
+  if(!e.target.closest('#loc-search') && !e.target.closest('#loc-search-results')){
+    const r = document.getElementById('loc-search-results');
+    if(r) r.style.display = 'none';
+  }
+});
 function goToPayment(){
   const total = cart.reduce((s,i)=>s+i.price+Object.values(i.addOns||{}).reduce((a,x)=>a+x.price,0),0);
   document.getElementById('pay-amt').textContent=F.money(total);
@@ -1210,6 +1430,11 @@ async function initPay() {
 const mpesaName = document.getElementById('mpesa-name')?.value.trim().toUpperCase();
 const amountPaid = parseInt(document.getElementById('mpesa-amount')?.value);
 const orderTotal = cart.reduce((s,i)=>s+i.price+Object.values(i.addOns||{}).reduce((a,x)=>a+x.price,0),0);
+
+if(!userLoc){
+  toast('📍 Please confirm your delivery location first','err',4000);
+  cPanelLocation(); return;
+}
 
 if(!mpesaName || mpesaName.length < 3){
   toast('Enter your M-Pesa registered name','err'); return;
@@ -1231,7 +1456,12 @@ if(!amountPaid || amountPaid < orderTotal){
   }));
 
   const order=await apiFetch('/api/orders',{method:'POST',body:{
-    items:orderItems,notes,location:userLoc,
+    customer_phone: user.phone,
+    customer_name:  user.name,
+    items:orderItems, notes, location:userLoc,
+    customer_lat:   userLoc?.lat,
+    customer_lng:   userLoc?.lng,
+    customer_area:  userLoc?.areaName,
     mpesa_reference:`${mpesaName} · KES ${amountPaid}`
   }});
 
@@ -1255,23 +1485,21 @@ if(!amountPaid || amountPaid < orderTotal){
     // STK push was sent — highlight the phone prompt
     if(stkBox)  stkBox.style.display='block';
     if(manualPay) manualPay.style.display='none';
-    cart = []; updateCartUI(); // clear cart when STK push sent
+    cart = []; updateCartUI();
+    document.getElementById('cart-float')?.classList.add('hidden'); // hide View Order btn
     btn.innerHTML='📱 Waiting for M-Pesa payment...'; btn.disabled=true;
     toast('Check your phone — M-Pesa prompt sent! 📱','ok',6000);
   } else {
-    // STK not yet live — manual payment flow
-btn.innerHTML = '✅ Confirm Payment';
-btn.disabled = false;
-enableEnterKey('auth-btn');
-// Change button to confirm payment instead of creating new order
-btn.onclick = () => confirmPayment(oid);
-toast('Order placed! Pay via M-Pesa, then click "Confirm Payment" 📱', 'ok', 5000);
-
-// go to tracking immediately, status updates when payment is done
-cart = []; 
-updateCartUI();
-showTracking(oid);
-
+    // Manual payment flow
+    btn.innerHTML = '✅ Confirm Payment';
+    btn.disabled = false;
+    enableEnterKey('auth-btn');
+    btn.onclick = () => confirmPayment(oid);
+    toast('Order placed! Pay via M-Pesa, then click "Confirm Payment" 📱', 'ok', 5000);
+    cart = [];
+    updateCartUI();
+    document.getElementById('cart-float')?.classList.add('hidden'); // hide View Order btn
+    showTracking(oid);
   } // end else
 } // end initPay
 
@@ -1304,6 +1532,11 @@ async function confirmPayment(orderId) {
     toast(res?.error || '❌ Failed to confirm payment. Try again.', 'err');
     btn.innerHTML = '✅ I Have Paid';
     btn.disabled = false;
+
+    if (res?.success) {
+    document.getElementById('cart-float')?.classList.add('hidden'); // ADD
+    
+    }
   }
 }
 
@@ -1491,11 +1724,12 @@ async function selectRider(orderId, riderPhone, el) {
     body: { rider_phone: riderPhone }
   });
   
-  if (res?.success) {
-    toast('Rider assigned! They will contact you. 🚴', 'ok');
-    renderTracking(orderId); // Refresh to show assigned rider
+    if (res?.success) {
+    toast('Rider notified! Waiting for response... 🚴', 'ok');
+    renderTracking(orderId);
+    // Customer waits — rider will chat back if interested
   } else {
-    toast(res?.error || 'Failed to assign rider. Try again.', 'err');
+    toast(res?.error || 'Failed. Try another rider .', 'err');
     loadAvailableRiders(orderId);
   }
 }
@@ -1506,29 +1740,11 @@ function setRating(type,val){
 }
 // async used to communicate with backed to await API-fetch
 async function submitRating(){
-    if(!foodR||!riderR){ toast('Please rate both food and rider','err'); return; }
-
-    // Recover active0Id from localStorage if it was lost on page refresh
-    if(!active0Id){
-      const saved = localStorage.getItem('kfc_active_order');
-      if(saved) active0Id = saved;
-    }
-    if(!active0Id){ toast('Could not find your order. Please contact support.','err'); return; }
-
-    const btn = document.querySelector('#rating-card .btn-primary');
-    if(btn){ btn.innerHTML='<span class="spin"></span>'; btn.disabled=true; }
-
-    const res = await apiFetch(`/api/orders/${active0Id}/rate`,{method:'POST',body:{foodStars:foodR,riderStars:riderR}});
-
-    if(res?.success){
-      const rc=document.getElementById('rating-card');
-      if(rc) rc.innerHTML='<div style="text-align:center;padding:14px"><div style="font-size:2rem">🙏</div><p style="font-family:var(--fh);letter-spacing:1px;margin-top:8px">THANK YOU!</p><p style="font-size:.82rem;color:var(--muted)">Your feedback helps us improve</p></div>';
-      toast('Rating submitted! Thank you 🙏','ok');
-      foodR=0; riderR=0; // reset so re-render doesn't re-enable submit
-    } else {
-      if(btn){ btn.innerHTML='Submit Rating'; btn.disabled=false; }
-      toast(res?.error || 'Could not submit rating — please try again','err');
-    }
+    if(!foodR||!riderR){ toast('Please rate both food and rider','err'); return; } //checks that both ratings have been set. foodR & riderR starts with 0, !foodR-if foodR = 0,(not yet rated). if either missing show an error, "return" stops the function, nothing submitted until both rated. 
+    await apiFetch(`/api/orders/${active0Id}/rate`,{method:'POST',body:{foodStars:foodR,riderStars:riderR}}); //sends both ratings to backend against the specific order ID. stored in supabase, foodR goes to restaurant, riderR goes to rider's profile. await means the function pause until backend responds before moving to next line.
+    const rc=document.getElementById('rating-card');
+    if(rc) rc.innerHTML='<div style="text-align:center;padding:14px"><div style="font-size:2rem">🙏</div><p style="font-family:var(--fh);letter-spacing:1px;margin-top:8px">THANK YOU!</p><p style="font-size:.82rem;color:var(--muted)">Your feedback helps us improve</p></div>';
+  toast('Rating submitted! Thank you 🙏','ok');
 }     
 
 
@@ -1537,18 +1753,15 @@ async function submitRating(){
 
 async function launchRider(){
     screen('s-rider');
-    // Restore earnings log from localStorage
-    try{
-      const savedLog = localStorage.getItem('kfc_earnings_log');
-      if(savedLog) riderState.earningsLog = JSON.parse(savedLog);
-    }catch{}
     startRiderRealtime(); // FIX: subscribe to dispatch broadcasts as soon as rider logs in
 
      // ADD — restore active delivery if rider refreshes mid-delivery
   if(!riderState.activeOrder){
     const saved = localStorage.getItem('kfc_active_delivery');
     if(saved){
-      try{ riderState.activeOrder = JSON.parse(saved); }catch{}
+      try{ riderState.activeOrder = JSON.parse(saved); 
+           riderState.collected = false; // reset collected state
+      }catch{}
     }
   }
 
@@ -1557,7 +1770,11 @@ async function launchRider(){
         renderRiderReg();
     } else {
         renderRiderHome();
+        // If has active order — go straight to delivery, skip the alert
+    if(riderState.activeOrder){
+      rPanel('delivery', document.querySelector('[data-s="delivery"]'));
     }
+  }
 }
 
 function rPanel(id,btn=null){
@@ -1771,7 +1988,7 @@ function renderRiderHome(){
       </div>
       <div class="stats2">
         <div class="sm"><div class="sm-v" id="r-trips">${riderState.todayTrips}</div><div class="sm-l">Today's Trips</div></div>
-        <div class="sm"><div class="sm-v" id="r-earn">KES ${riderState.todayTrips*100}</div><div class="sm-l">Today's Earnings</div></div>
+        <div class="sm-v" id="r-earn">KES ${riderState.todayEarnings||0}</div><<div class="sm-l">Today's Earnings</div></div>
         <div class="sm"><div class="sm-v">${riderState.deliveries}</div><div class="sm-l">Total Trips</div></div>
         <div class="sm"><div class="sm-v" style="color:var(--green)">${riderState.rating}</div><div class="sm-l">Rating</div></div>
       </div>
@@ -1794,38 +2011,80 @@ function showRiderOrderAlert(o){
     const z=document.getElementById('r-alert-zone');
     if(!z) return;
     let t=180;
+
     const lat = o.location?.lat || o.customer_lat;
     const lng = o.location?.lng || o.customer_lng;
-    const mapsLink = lat && lng
-      ? `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`
-      : `https://www.google.com/maps/search/${encodeURIComponent(o.customer_area||'Narok')}`;
+
+    // OpenStreetMap location preview — no API key needed
+    const mapHtml = (lat && lng) ? `
+      <div style="margin:10px 0;border-radius:10px;overflow:hidden;height:155px;position:relative;border:1px solid var(--line2)">
+        <iframe
+          src="https://www.openstreetmap.org/export/embed.html?bbox=${(lng-0.04).toFixed(5)},${(lat-0.04).toFixed(5)},${(lng+0.04).toFixed(5)},${(lat+0.04).toFixed(5)}&layer=mapnik&marker=${lat},${lng}"
+          style="width:100%;height:100%;border:0;pointer-events:none" loading="lazy">
+        </iframe>
+        <div style="position:absolute;bottom:0;right:0;background:rgba(0,0,0,.65);padding:3px 7px;font-size:.68rem;border-radius:4px 0 0 0;color:#fff">
+          📍 Customer location
+        </div>
+      </div>
+      <a href="https://www.google.com/maps/dir/?api=1&origin=-1.0833,35.8667&destination=${lat},${lng}"
+         target="_blank"
+         style="display:block;background:#1565c0;color:#fff;text-align:center;padding:9px;border-radius:8px;text-decoration:none;font-size:.82rem;font-weight:600;margin:4px 0">
+        🗺️ Open Navigation (Google Maps)
+      </a>` : '';
+
     z.innerHTML=`<div class="o-alert">
     <div class="oa-top"><div class="oa-title">🔔 NEW ORDER!</div><div class="oa-timer" id="ot">${fmtTime(t)}</div></div>
     <div class="oa-detail">📍 Collect: KFC Narok</div>
-    <div class="oa-detail">📍 Deliver to: <strong>${o.customer_area}</strong></div>
-    ${lat ? `<a href="${mapsLink}" target="_blank" class="oa-detail" style="color:var(--blue);text-decoration:underline">🗺️ Preview customer location</a>` : ''}
-    <div class="oa-detail">💰 Your fee: Chat to agree before accepting</div>
-    <div class="oa-items">${(o.items||[]).map(i=>`• ${i.name}${i.note?` (${i.note})`:''}`).join('<br>')}</div>
-    <div class="oa-btns">
-      <button class="btn-accept" onclick="acceptOrder()">✅ ACCEPT</button>
-      <button class="btn btn-ghost" style="padding:8px 14px;font-size:.8rem" onclick="openChat(${o.id||0},'rider')">💬 Chat</button>
-      <button class="btn-decline" onclick="declineOrder()">Pass</button>
-    </div>
+    <div class="oa-detail">📍 Deliver to: <strong>${o.customer_area}</strong>${o.distance_km ? ` · ~${o.distance_km} km` : ''}</div>
+    <div class="oa-detail" style="color:var(--green);font-weight:700;font-size:.92rem">💰 Delivery Fee: KES ${o.delivery_fee > 0 ? o.delivery_fee : '—  (agree via chat)'}</div>
+    ${mapHtml}
+    <div class="oa-items" style="margin-top:8px">${(o.items||[]).map(i=>`• ${i.name}${i.note?` (${i.note})`:''}`).join('<br>')}</div>
+    <button class="btn btn-ghost btn-full" style="margin-top:10px" onclick="openPreAcceptChat(${o.id})">💬 Chat with Customer First</button>
+    <div class="oa-btns"><button class="btn-accept" onclick="acceptOrder()">✅ ACCEPT</button><button class="btn-decline" onclick="declineOrder()">Pass</button></div>
      </div>`;
+
+    // Subscribe to chat for this order BEFORE accepting
+  supa.channel('order-chat-'+o.id)
+    .on('broadcast',{event:'msg'},({payload})=>{
+      if(chatOrderId !== o.id){
+        toast(`💬 Customer: ${payload.text.substring(0,30)}...`,'ok',5000);
+        playBeep();
+      }
+    })
+    .subscribe();
+
     if(oTimer) clearInterval(oTimer);
     oTimer=setInterval(()=>{ t--; const el=document.getElementById('ot'); if(el)el.textContent=fmtTime(t); if(t<=0){clearInterval(oTimer);z.innerHTML='';riderState.activeOrder=null;toast('0rder expired - no response in time','warn');} },1000);
 }
 
+function openPreAcceptChat(orderId){
+  // Store the order temporarily so chat works before acceptance
+  if(!riderState.activeOrder) riderState.activeOrder = {id: orderId};
+  openChat(orderId, 'rider');
+}
 function fmtTime(s){ return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`; }
 
 function acceptOrder(){
   if(oTimer) clearInterval(oTimer);
-  const orderId = riderState.activeOrder?.id;
-  apiFetch(`/api/orders/${orderId}/accept`, {method:'POST'});
-  // Persist active order so it survives refresh
+  apiFetch(`/api/orders/${riderState.activeOrder.id}/accept`, {method:'POST'});
   localStorage.setItem('kfc_active_delivery', JSON.stringify(riderState.activeOrder));
-  // Start chat listener now that we have an order — fixes Issue 8
-  startRiderChatListener(orderId);
+
+  // ADD — listen for chat requests on this specific order
+  const orderId = riderState.activeOrder.id;
+  supa.channel('order-chat-'+orderId)
+    .on('broadcast',{event:'chat_request'},({payload})=>{
+      toast(`💬 ${payload.customerName} wants to chat about delivery fee!`,'ok',6000);
+      playBeep();
+    })
+    .on('broadcast',{event:'msg'},({payload})=>{
+      // Show notification if chat is not open
+      if(chatOrderId !== orderId){
+        toast(`💬 New message from customer`,'ok',4000);
+        playBeep();
+      }
+    })
+    .subscribe();
+
   toast('Order accepted! Head to KFC Narok 🏍️','ok');
   document.getElementById('r-alert-zone').innerHTML='';
   riderState.collected=false;
@@ -1833,11 +2092,15 @@ function acceptOrder(){
 }
 
 function declineOrder(){
-    if(oTimer) clearInterval(oTimer);
-    document.getElementById('r-alert-zone').innerHTML='';
-    riderState.activeOrder=null;
-    toast('Order passed');
-}
+  if(oTimer) clearInterval(oTimer);
+  document.getElementById('r-alert-zone').innerHTML='';
+  // ADD — tell backend this rider declined
+  if(riderState.activeOrder?.id){
+    apiFetch(`/api/orders/${riderState.activeOrder.id}/decline`, {method:'POST'});
+  }
+  riderState.activeOrder=null;
+  toast('Order passed');
+} 
 
 function renderRiderDelivery(){
     const rc=document.getElementById('rider-content');
@@ -1859,22 +2122,34 @@ function renderRiderDelivery(){
       </div>
       <div style="background:var(--dark3);border-radius:var(--r);padding:12px;margin-bottom:12px;font-size:.85rem">
         📍 Deliver to: <strong>${o.customer_area}</strong><br>
-        💰 Delivery fee: <strong style="color:var(--green)">KES ${riderState.agreedFee||'?'}</strong> — collect cash at door
+        💰 Delivery fee: <strong style="color:var(--green)">${riderState.agreedFee ? `KES ${riderState.agreedFee} (agreed)` : 'Agree with customer'}</strong> - collect cash at door
       </div>
-      ${(()=>{
-        const lat = o.location?.lat || o.customer_lat;
-        const lng = o.location?.lng || o.customer_lng;
-        if(!lat) return '';
-        const dest = `${lat},${lng}`;
-        const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${dest}&travelmode=driving`;
-        return `<a href="${mapsUrl}" target="_blank" class="btn btn-full" style="display:flex;align-items:center;justify-content:center;gap:8px;padding:12px;background:var(--blue);color:#fff;border-radius:var(--r);margin-bottom:10px;font-weight:600;text-decoration:none">
-          🧭 Navigate to Customer
-        </a>`;
-      })()}
-      <button class="btn btn-ghost btn-full" style="margin-top:8px"
-          onclick="openChat(${o.id},'rider')">
-          💬 Chat with Customer — Negotiate Fee
-      </button>
+
+      ${(o.location?.lat || o.customer_lat) ? `
+      <div style="background:var(--dark3);border-radius:var(--r);padding:12px;margin-bottom:12px">
+        <div style="font-size:.75rem;color:var(--muted);margin-bottom:8px;font-weight:600;letter-spacing:.5px">📍 CUSTOMER LOCATION</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <a href="https://www.google.com/maps/dir/?api=1&destination=${o.location?.lat||o.customer_lat},${o.location?.lng||o.customer_lng}"
+             target="_blank"
+             style="flex:1;background:var(--red);color:#fff;text-align:center;padding:10px;border-radius:8px;text-decoration:none;font-weight:600;font-size:.85rem">
+            🗺️ Navigate (Google Maps)
+          </a>
+          <a href="https://maps.apple.com/?daddr=${o.location?.lat||o.customer_lat},${o.location?.lng||o.customer_lng}&dirflg=d"
+             target="_blank"
+             style="flex:1;background:var(--dark2);color:var(--white);text-align:center;padding:10px;border-radius:8px;text-decoration:none;font-weight:600;font-size:.85rem;border:1px solid var(--line2)">
+            🍎 Apple Maps
+          </a>
+        </div>
+        <div style="font-size:.72rem;color:var(--muted);margin-top:6px;text-align:center">
+          ${(o.location?.lat||o.customer_lat).toFixed(5)}, ${(o.location?.lng||o.customer_lng).toFixed(5)}
+        </div>
+      </div>
+      ` : `
+      <div style="background:var(--dark3);border-radius:var(--r);padding:10px 12px;margin-bottom:12px;font-size:.8rem;color:var(--orange)">
+        ⚠️ No GPS coordinates — ask customer for their exact location via chat
+      </div>
+      `}
+    
     ${riderState.collected
   ? `<button class="btn btn-primary btn-full" onclick="showPin()">🔐 Enter Customer PIN</button>`
   : riderState.activeOrder?.status === 'paid' || riderState.activeOrder?.status === 'rider_assigned'
@@ -1921,20 +2196,23 @@ function markCollected(){
  async function confirmPin() {
     const r=await apiFetch(`/api/orders/${riderState.activeOrder?.id}/confirm-pin`,{method:'POST',body:{pin:pinBuf}});
     if(r){
-    const fee = riderState.agreedFee || 0;
-    const now = new Date();
-    const dateStr = now.toLocaleDateString('en-KE',{day:'numeric',month:'short',year:'numeric'});
-    riderState.earningsLog = riderState.earningsLog || [];
-    riderState.earningsLog.push({ date:dateStr, orderNumber:riderState.activeOrder?.order_number||'', fee, ts:now.getTime() });
-    riderState.todayEarnings = (riderState.todayEarnings||0) + fee;
-    riderState.agreedFee = 0;
-    try{ localStorage.setItem('kfc_earnings_log', JSON.stringify(riderState.earningsLog)); }catch{}
+    // Calculate earnings from agreed fee or order delivery_fee
+    const agreedFee = riderState.agreedFee
+      || parseInt(localStorage.getItem('kfc_agreed_fee'))
+      || riderState.activeOrder?.delivery_fee
+      || 0;
+
     riderState.activeOrder=null; riderState.collected=false;
     riderState.todayTrips++; riderState.deliveries++;
+    riderState.todayEarnings = (riderState.todayEarnings || 0) + agreedFee;
+    riderState.agreedFee = 0;
+    localStorage.removeItem('kfc_agreed_fee');
+
     document.querySelectorAll('#s-rider .bnav-btn').forEach(b=>b.classList.toggle('on',b.dataset.s==='home'));
     renderRiderHome();
-    toast(`🎉 Delivery done! KES ${fee} earned.`,'ok',5000);
-     localStorage.removeItem('kfc_active_delivery'); 
+    toast(`🎉 PIN correct! Delivery complete${agreedFee ? ` · KES ${agreedFee} earned` : ''}. Collect cash from customer.`,'ok',6000);
+    localStorage.removeItem('kfc_active_delivery');
+    localStorage.removeItem('kfc_chat_'+riderState.activeOrder?.id);
   } else {
     for(let i=0;i<4;i++){const el=document.getElementById(`p${i}`); if(el)el.classList.add('err');}
     pinBuf=''; setTimeout(updatePinDisplay,600);
@@ -1942,37 +2220,81 @@ function markCollected(){
     }   
  }
 
- function renderRiderEarnings(){
+ async function renderRiderEarnings(){
   const rc=document.getElementById('rider-content');
-  const log = riderState.earningsLog || [];
-  const totalAll = log.reduce((s,e)=>s+(e.fee||0),0);
-  // Group log by date for history display
-  const byDate = {};
-  log.forEach(e=>{ if(!byDate[e.date]) byDate[e.date]={total:0,trips:0}; byDate[e.date].total+=e.fee||0; byDate[e.date].trips++; });
-  const histRows = Object.entries(byDate).reverse().map(([d,v])=>
-    `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:.85rem">
-      <span>${d} · ${v.trips} trip${v.trips!==1?'s':''}</span>
-      <span style="color:var(--green);font-weight:600">KES ${v.total.toLocaleString()}</span>
-    </div>`).join('');
   rc.innerHTML=`<div style="padding:14px 16px 100px;max-width:468px;margin:0 auto">
+    <div style="text-align:center;padding:20px 0 8px"><span class="spin"></span></div>
+  </div>`;
+
+  const phone = riderState.phone || user.phone;
+  const data = await apiFetch('/api/rider/earnings') || {};
+
+  const todayEarnings   = data.today_earnings   ?? riderState.todayEarnings ?? 0;
+  const todayDeliveries = data.today_deliveries ?? riderState.todayTrips    ?? 0;
+  const totalEarnings   = data.total_earnings   ?? 0;
+  const totalDeliveries = data.total_deliveries ?? riderState.deliveries   ?? 0;
+  const history         = data.history          ?? [];
+
+  const historyHTML = history.length
+    ? history.map(day => {
+        const dateLabel = (() => {
+          const today = new Date().toISOString().slice(0,10);
+          const yest  = new Date(Date.now()-86400000).toISOString().slice(0,10);
+          if(day.date===today) return 'Today';
+          if(day.date===yest)  return 'Yesterday';
+          const d = new Date(day.date+'T00:00:00');
+          return d.toLocaleDateString('en-KE',{weekday:'short',month:'short',day:'numeric'});
+        })();
+        return `
+        <div style="background:var(--dark3);border-radius:10px;padding:14px;margin-bottom:9px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-weight:700;font-size:.92rem">${dateLabel}</span>
+            <span style="font-family:var(--fh);color:var(--green);font-size:1.1rem;letter-spacing:1px">KES ${day.earnings.toLocaleString()}</span>
+          </div>
+          <div style="font-size:.77rem;color:var(--muted);margin-bottom:8px">${day.deliveries} deliver${day.deliveries===1?'y':'ies'}</div>
+          ${(day.orders||[]).map(o=>`
+            <div style="display:flex;justify-content:space-between;font-size:.76rem;padding:4px 0;border-top:1px solid var(--line)">
+              <span style="color:var(--muted)">#${o.order_number} · ${o.customer_area||''}</span>
+              <span style="font-weight:700">KES ${(o.delivery_fee||0).toLocaleString()}</span>
+            </div>`).join('')}
+        </div>`}).join('')
+    : `<div style="text-align:center;padding:30px;color:var(--muted);font-size:.85rem">No deliveries yet${data.history_cleared_at?' since last clear':''}</div>`;
+
+  rc.innerHTML=`<div style="padding:14px 16px 100px;max-width:468px;margin:0 auto">
+    <!-- Today summary -->
     <div class="card">
-      <div class="card-t">TODAY'S EARNINGS</div>
-      <div style="text-align:center;padding:18px 0">
-        <div style="font-family:var(--fh);font-size:3.5rem;color:var(--green);letter-spacing:2px">KES ${(riderState.todayEarnings||0).toLocaleString()}</div>
-        <div style="font-size:.82rem;color:var(--muted);margin-top:4px">${riderState.todayTrips} deliveries today</div>
+      <div class="card-t">TODAY</div>
+      <div style="text-align:center;padding:12px 0">
+        <div style="font-family:var(--fh);font-size:3rem;color:var(--green);letter-spacing:2px">KES ${todayEarnings.toLocaleString()}</div>
+        <div style="font-size:.82rem;color:var(--muted);margin-top:4px">${todayDeliveries} deliver${todayDeliveries===1?'y':'ies'} today</div>
       </div>
-      <div class="div"></div>
-      <div style="display:flex;justify-content:space-between;font-size:.87rem;padding:5px 0"><span style="color:var(--muted)">All-time total</span><span style="color:var(--green);font-weight:600">KES ${totalAll.toLocaleString()}</span></div>
-      <div style="display:flex;justify-content:space-between;font-size:.87rem;padding:5px 0"><span style="color:var(--muted)">Total deliveries</span><span>${riderState.deliveries}</span></div>
-      <div style="display:flex;justify-content:space-between;font-size:.87rem;padding:5px 0"><span style="color:var(--muted)">Average rating</span><span style="color:var(--green)">⭐ ${riderState.rating}</span></div>
     </div>
-    <div class="card" style="margin-top:11px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <div class="card-t" style="margin:0">EARNINGS HISTORY</div>
-        ${log.length ? `<button class="btn btn-ghost btn-sm" style="color:var(--red);font-size:.75rem" onclick="clearEarningsHistory()">🗑 Clear</button>` : ''}
+    <!-- All-time totals -->
+    <div class="card" style="margin-top:10px">
+      <div class="card-t">ALL-TIME TOTALS${data.history_cleared_at ? ` <span style="font-size:.68rem;color:var(--muted);font-family:var(--fb)">(since ${new Date(data.history_cleared_at).toLocaleDateString('en-KE')})</span>` : ''}</div>
+      <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:.88rem;border-bottom:1px solid var(--line)">
+        <span style="color:var(--muted)">Total earned</span>
+        <span style="font-family:var(--fh);color:var(--green);font-size:1rem">KES ${totalEarnings.toLocaleString()}</span>
       </div>
-      ${histRows || '<div style="color:var(--muted);font-size:.83rem;padding:8px 0">No earnings recorded yet.</div>'}
+      <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:.88rem;border-bottom:1px solid var(--line)">
+        <span style="color:var(--muted)">Total deliveries</span>
+        <span style="font-weight:700">${totalDeliveries}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:.88rem">
+        <span style="color:var(--muted)">Average rating</span>
+        <span style="color:var(--green)">⭐ ${riderState.rating || 'N/A'}</span>
+      </div>
     </div>
+    <!-- Earnings history -->
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:16px 0 10px">
+      <div style="font-size:.8rem;font-weight:700;letter-spacing:1px;color:var(--muted)">EARNINGS HISTORY</div>
+      ${history.length ? `<button onclick="clearEarningsHistory()"
+        style="background:transparent;border:1px solid var(--line2);color:var(--muted);
+               padding:5px 12px;border-radius:8px;font-size:.74rem;cursor:pointer">
+        🗑 Clear History
+      </button>` : ''}
+    </div>
+    ${historyHTML}
     <div class="card" style="margin-top:11px">
       <div class="card-t">TIPS TO EARN MORE</div>
       <div style="font-size:.84rem;color:var(--muted);line-height:1.85">
@@ -1985,14 +2307,17 @@ function markCollected(){
   </div>`;
 }
 
-function clearEarningsHistory(){
-  if(!confirm('Clear all earnings history? This cannot be undone.')) return;
-  riderState.earningsLog = [];
-  riderState.todayEarnings = 0;
-  riderState.todayTrips = 0;
-  try{ localStorage.removeItem('kfc_earnings_log'); }catch{}
-  renderRiderEarnings();
-  toast('Earnings history cleared','ok');
+async function clearEarningsHistory(){
+  if(!confirm('Clear your earnings history display?\n\nYour delivery records are kept safely — only the display counter resets.')) return;
+  const res = await apiFetch('/api/rider/earnings/clear', {method:'DELETE'});
+  if(res?.success){
+    toast('✅ Earnings history cleared','ok');
+    riderState.todayEarnings = 0;
+    riderState.todayTrips = 0;
+    renderRiderEarnings();
+  } else {
+    toast('Could not clear history','err');
+  }
 }
 
 function startLocTracking(){
@@ -2170,57 +2495,6 @@ async function renderAdminOrders(){
     :'<div class="empty"><div class="ei">📦</div><h3>NO ORDERS</h3></div>';
 }
 
-async function renderAdminRevenue(){
-  // Fetch all delivered orders — group by date for revenue history
-  const data = await apiFetch('/api/admin/orders?status=delivered&limit=500');
-  const orders = (data?.orders || []).filter(o => o.status === 'delivered');
-
-  // Group by calendar date
-  const byDate = {};
-  orders.forEach(o => {
-    const d = new Date(o.delivered_at || o.created_at);
-    const key = d.toLocaleDateString('en-KE',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
-    if(!byDate[key]) byDate[key] = {revenue:0, count:0, orders:[]};
-    byDate[key].revenue += o.food_amount || 0;
-    byDate[key].count++;
-    byDate[key].orders.push(o);
-  });
-
-  const totalRevenue = orders.reduce((s,o)=>s+(o.food_amount||0),0);
-  const rows = Object.entries(byDate).map(([date, v]) => `
-    <div class="card" style="margin-bottom:10px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <div style="font-weight:700;font-size:.9rem">${date}</div>
-        <div style="font-family:var(--fh);color:var(--green);font-size:1rem">KES ${v.revenue.toLocaleString()}</div>
-      </div>
-      <div style="font-size:.78rem;color:var(--muted);margin-bottom:8px">${v.count} order${v.count!==1?'s':''} delivered</div>
-      <details style="font-size:.78rem">
-        <summary style="cursor:pointer;color:var(--muted)">View orders</summary>
-        <div style="margin-top:6px">
-          ${v.orders.map(o=>`
-            <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--line)">
-              <span>${o.order_number} · ${o.customer_name||o.customer_phone||'?'}</span>
-              <span style="color:var(--green)">KES ${(o.food_amount||0).toLocaleString()}</span>
-            </div>`).join('')}
-        </div>
-      </details>
-    </div>`).join('');
-
-  const el = document.getElementById('ap-revenue');
-  if(!el){ console.warn('ap-revenue element not found — add it to index.html'); return; }
-  el.innerHTML = `
-    <div style="padding:16px">
-      <div class="card" style="margin-bottom:14px;background:var(--dark2)">
-        <div style="text-align:center;padding:12px 0">
-          <div style="font-size:.8rem;color:var(--muted)">All-time Revenue</div>
-          <div style="font-family:var(--fh);font-size:2.5rem;color:var(--green);letter-spacing:2px;margin-top:4px">KES ${totalRevenue.toLocaleString()}</div>
-          <div style="font-size:.78rem;color:var(--muted);margin-top:4px">${orders.length} total deliveries</div>
-        </div>
-      </div>
-      ${rows || '<div class="empty"><div class="ei">💰</div><h3>NO REVENUE DATA</h3><p>Delivered orders will appear here</p></div>'}
-    </div>`;
-}
-
 function orderRow(o){
   const items=(o.items||[]).slice(0,2).map(i=>i.name).join(', ')+(o.items?.length>2?'…':'');
   return `<div class="o-row">
@@ -2248,21 +2522,55 @@ async function markOrderPaid(num, id) {
   if(!confirm(`Confirm payment received for ${num}?`)) return;
   const result = await apiFetch(`/api/admin/orders/${id}/mark-paid`, {method:'POST'});
   if(result?.success){
-    toast(`${num} marked as paid ✅`, 'ok');
-    await renderAdminOrders(); // await so list refreshes after backend confirms
+    // Show PIN exactly once — it is never retrievable again
+    showPinOnceModal(num, result.pin);
+    await renderAdminOrders();
   } else {
     toast(`Could not mark ${num} as paid — try again`, 'err');
   }
 }
 
+function showPinOnceModal(orderNum, pin){
+  // Remove any existing modal
+  document.getElementById('pin-once-modal')?.remove();
+  document.body.insertAdjacentHTML('beforeend',`
+    <div id="pin-once-modal" style="
+      position:fixed;inset:0;background:rgba(0,0,0,.75);
+      display:flex;align-items:center;justify-content:center;z-index:3000">
+      <div style="
+        background:var(--dark2);border-radius:18px;padding:28px 24px;
+        max-width:340px;width:92%;text-align:center;border:1px solid var(--line2)">
+        <div style="font-size:2.5rem;margin-bottom:8px">✅</div>
+        <div style="font-family:var(--fh);font-size:1.1rem;letter-spacing:2px;margin-bottom:4px">ORDER MARKED AS PAID</div>
+        <div style="font-size:.82rem;color:var(--muted);margin-bottom:20px">Order: <strong style="color:var(--white)">${orderNum}</strong></div>
+        <div style="background:var(--dark3);border:2px solid var(--red);border-radius:12px;padding:18px;margin-bottom:16px">
+          <div style="font-size:.72rem;color:var(--muted);letter-spacing:1px;margin-bottom:8px">DELIVERY PIN — SHOWN ONCE</div>
+          <div style="font-family:var(--fh);font-size:3rem;letter-spacing:12px;color:var(--red)">${pin}</div>
+          <div style="font-size:.73rem;color:var(--muted);margin-top:8px">Sent to customer via SMS</div>
+        </div>
+        <div style="font-size:.75rem;color:var(--orange);margin-bottom:18px">
+          ⚠️ This PIN will <strong>not</strong> be shown again. The customer received it by SMS.
+        </div>
+        <button onclick="document.getElementById('pin-once-modal').remove()"
+          style="background:var(--red);color:#fff;border:none;border-radius:10px;
+                 padding:12px 28px;font-family:var(--fh);font-size:.9rem;
+                 letter-spacing:1px;cursor:pointer;width:100%">
+          Got it — Close
+        </button>
+      </div>
+    </div>`);
+}
+
 
 async function renderAdminRiders(){
-  // Fetch all riders regardless of status — shows pending, approved and suspended
-  const [pendingData, approvedData] = await Promise.all([
+  const [pendingData, approvedData, suspendedData] = await Promise.all([
     apiFetch('/api/admin/riders/pending'),
-    apiFetch('/api/admin/riders/approved')
+    apiFetch('/api/admin/riders/approved'),
+    apiFetch('/api/admin/riders/suspended'),
   ]);
-  const riders = [...(pendingData||[]), ...(approvedData||[])];
+  const pending   = pendingData   || [];
+  const approved  = approvedData  || [];
+  const suspended = suspendedData || [];
 
   const getImgUrl = async (path) => {
     if(!path) return null;
@@ -2270,60 +2578,72 @@ async function renderAdminRiders(){
     return data?.signedUrl;
   };
 
-  const statusBadge = s => ({
-    pending:   '<span class="badge b-orange">Pending</span>',
-    approved:  '<span class="badge b-green">Approved</span>',
-    suspended: '<span class="badge b-red">Suspended</span>'
-  })[s] || `<span class="badge b-muted">${s}</span>`;
-
-  const riderCards = await Promise.all(riders.map(async r => {
-    const idUrl = await getImgUrl(r.id_photo_url);
-    const licUrl = await getImgUrl(r.license_photo_url);
-    const selfieUrl = await getImgUrl(r.selfie_url);
+  // Pending — full doc review cards
+  const pendingCards = await Promise.all(pending.map(async r => {
+    const idUrl      = await getImgUrl(r.id_photo_url);
+    const licUrl     = await getImgUrl(r.license_photo_url);
+    const selfieUrl  = await getImgUrl(r.selfie_url);
     return `
       <div class="rider-rev" id="rr-${r.phone}">
         <div class="rr-top">
           <div class="rr-av">👤</div>
-          <div style="flex:1">
-            <div class="rr-name">${r.name||'Unknown'} ${statusBadge(r.status)}</div>
-            <div class="rr-phone">${F.phone(r.phone)} · ${F.date(r.created_at)}</div>
-            ${r.rating ? `<div style="font-size:.75rem;color:var(--muted)">⭐ ${r.rating} · ${r.total_deliveries||0} deliveries</div>` : ''}
+          <div>
+            <div class="rr-name">${r.name||'Unknown'}</div>
+            <div class="rr-phone">${F.phone(r.phone)} · Applied ${F.date(r.created_at)}</div>
           </div>
         </div>
-      <div class="doc-row">
-    ${r.id_photo_url ? `<div class="dc"><img src="${idUrl}" style="width:100%;border-radius:8px;cursor:pointer" onclick="window.open(this.src)"/><div style="font-size:.7rem;color:var(--muted);margin-top:4px">National ID</div></div>` : '<div class="dc"><span class="dc-e">🪪</span>No ID</div>'}
-    ${r.license_photo_url ? `<div class="dc"><img src="${licUrl}" style="width:100%;border-radius:8px;cursor:pointer" onclick="window.open(this.src)"/><div style="font-size:.7rem;color:var(--muted);margin-top:4px">License</div></div>` : '<div class="dc"><span class="dc-e">🚗</span>No License</div>'}
-    ${r.selfie_url ? `<div class="dc"><img src="${selfieUrl}" style="width:100%;border-radius:8px;cursor:pointer" onclick="window.open(this.src)"/><div style="font-size:.7rem;color:var(--muted);margin-top:4px">Selfie</div></div>` : '<div class="dc"><span class="dc-e">🤳</span>No Selfie</div>'}
-      </div>
+        <div class="doc-row">
+          ${r.id_photo_url ? `<div class="dc"><img src="${idUrl}" style="width:100%;border-radius:8px;cursor:pointer" onclick="window.open(this.src)"/><div style="font-size:.7rem;color:var(--muted);margin-top:4px">National ID</div></div>` : '<div class="dc"><span class="dc-e">🪪</span>No ID uploaded</div>'}
+          ${r.license_photo_url ? `<div class="dc"><img src="${licUrl}" style="width:100%;border-radius:8px;cursor:pointer" onclick="window.open(this.src)"/><div style="font-size:.7rem;color:var(--muted);margin-top:4px">License</div></div>` : '<div class="dc"><span class="dc-e">🚗</span>No License uploaded</div>'}
+          ${r.selfie_url ? `<div class="dc"><img src="${selfieUrl}" style="width:100%;border-radius:8px;cursor:pointer" onclick="window.open(this.src)"/><div style="font-size:.7rem;color:var(--muted);margin-top:4px">Selfie</div></div>` : '<div class="dc"><span class="dc-e">🤳</span>No Selfie uploaded</div>'}
+        </div>
         <div class="rr-btns">
-          ${r.status === 'pending' ? `
-            <button class="btn btn-green btn-full btn-sm" onclick="approveRider('${r.phone}')">✅ Approve</button>
-            <button class="btn btn-danger btn-sm" onclick="rejectRider('${r.phone}')">Reject</button>` : ''}
-          ${r.status === 'approved' ? `
-            <button class="btn btn-danger btn-full btn-sm" onclick="suspendRider('${r.phone}','${r.name||'Rider'}')">🚫 Suspend Rider</button>` : ''}
-          ${r.status === 'suspended' ? `
-            <button class="btn btn-green btn-full btn-sm" onclick="unsuspendRider('${r.phone}','${r.name||'Rider'}')">✅ Lift Suspension</button>` : ''}
+          <button class="btn btn-green btn-full btn-sm" onclick="approveRider('${r.phone}')">✅ Approve Rider</button>
+          <button class="btn btn-danger btn-sm" onclick="rejectRider('${r.phone}')">Reject</button>
         </div>
       </div>`;
   }));
 
-  document.getElementById('a-riders').innerHTML = riders.length
-    ? riderCards.join('')
-    : '<div class="empty"><div class="ei">✅</div><h3>NO RIDERS YET</h3><p>Applications will appear here</p></div>';
-}
+  // Approved — compact rows with suspend button
+  const approvedRows = approved.map(r => `
+    <div class="o-row" id="rr-${r.phone}">
+      <div class="or-l">
+        <div class="or-num">🏍️ ${r.name||'Unknown'}</div>
+        <div class="or-m">${F.phone(r.phone)} · ⭐ ${r.rating||'New'} · ${r.total_deliveries||0} deliveries · ${r.is_available?'<span style="color:var(--green)">🟢 Online</span>':'⚪ Offline'}</div>
+      </div>
+      <div class="or-r">
+        <button class="btn btn-ghost btn-sm" style="color:var(--orange);font-size:.73rem;border:1px solid var(--orange)"
+          onclick="suspendActiveRider('${r.phone}','${r.name||'this rider'}')">🚫 Suspend</button>
+      </div>
+    </div>`).join('');
 
-async function suspendRider(phone, name){
-  if(!confirm(`Suspend ${name}? They will be locked out.`)) return;
-  await apiFetch('/api/admin/riders/suspend',{method:'POST',body:{phone}});
-  toast(`${name} suspended`,'warn');
-  renderAdminRiders();
-}
+  // Suspended — compact rows with reinstate button
+  const suspendedRows = suspended.map(r => `
+    <div class="o-row" id="rr-${r.phone}" style="border-left:3px solid var(--red)">
+      <div class="or-l">
+        <div class="or-num" style="color:var(--red)">🚫 ${r.name||'Unknown'}</div>
+        <div class="or-m">${F.phone(r.phone)} · Suspended</div>
+      </div>
+      <div class="or-r">
+        <button class="btn btn-green btn-sm" onclick="unsuspendRider('${r.phone}','${r.name||'this rider'}')">✅ Reinstate</button>
+      </div>
+    </div>`).join('');
 
-async function unsuspendRider(phone, name){
-  if(!confirm(`Lift suspension for ${name}?`)) return;
-  const res = await apiFetch('/api/admin/riders/unsuspend',{method:'POST',body:{phone}});
-  if(res?.success){ toast(`${name} reinstated ✅`,'ok'); renderAdminRiders(); }
-  else toast('Could not lift suspension — try again','err');
+  document.getElementById('a-riders').innerHTML = `
+    <div class="a-sec-t">PENDING APPROVAL (${pending.length})</div>
+    ${pending.length
+      ? pendingCards.join('')
+      : '<div class="empty" style="padding:16px"><div class="ei" style="font-size:1.8rem">✅</div><p style="font-size:.82rem">No pending applications</p></div>'}
+
+    <div class="a-sec-t" style="margin-top:20px">ACTIVE RIDERS (${approved.length})</div>
+    ${approved.length
+      ? `<div style="background:var(--dark2);border-radius:var(--r);overflow:hidden">${approvedRows}</div>`
+      : '<div style="color:var(--muted);font-size:.82rem;padding:12px 4px">No approved riders yet</div>'}
+
+    ${suspended.length ? `
+    <div class="a-sec-t" style="margin-top:20px">SUSPENDED RIDERS (${suspended.length})</div>
+    <div style="background:var(--dark2);border-radius:var(--r);overflow:hidden">${suspendedRows}</div>` : ''}
+  `;
 }
 
 async function approveRider(phone) {
@@ -2339,6 +2659,30 @@ async function rejectRider(phone) {
   const el=document.getElementById(`rr-${phone}`);
   if(el) { el.style.opacity='0'; setTimeout(()=>el.remove(),300); }
   toast('Rider rejected','warn');
+}
+
+// Suspend an already-approved rider
+async function suspendActiveRider(phone, name) {
+  if(!confirm(`Suspend ${name}?\nThey will be logged out and cannot accept orders until reinstated.`)) return;
+  const res = await apiFetch('/api/admin/riders/suspend',{method:'POST',body:{phone}});
+  if(res?.success || res !== null){
+    toast(`🚫 ${name} suspended`,'warn');
+    renderAdminRiders();
+  } else {
+    toast('Could not suspend rider — try again','err');
+  }
+}
+
+// Lift a suspension — rider goes back to approved
+async function unsuspendRider(phone, name) {
+  if(!confirm(`Reinstate ${name}?\nThey will be able to log in and accept orders again.`)) return;
+  const res = await apiFetch('/api/admin/riders/unsuspend',{method:'POST',body:{phone}});
+  if(res?.success){
+    toast(`✅ ${name} reinstated — SMS sent`,'ok');
+    renderAdminRiders();
+  } else {
+    toast(res?.error || 'Could not reinstate rider','err');
+  }
 }
 
 
@@ -2393,6 +2737,89 @@ async function renderAdminMenu() {
     </div>`).join('')}`;
 }
 
+
+// ── ADMIN REVENUE HISTORY ─────────────────────────────────────────────────────
+// Separate tab — does not touch or replace today's metrics on Overview.
+// Shows a day-by-day breakdown for the past N days with totals.
+
+async function renderAdminRevenue(){
+  const el = document.getElementById('a-revenue');
+  if(!el) return;
+  el.innerHTML = `<div style="text-align:center;padding:30px"><span class="spin"></span></div>`;
+
+  // Read selected period from dropdown (if rendered), default 30
+  const days = parseInt(document.getElementById('rev-days-sel')?.value || '30');
+  const data  = await apiFetch(`/api/admin/revenue/history?days=${days}`);
+
+  if(!data){
+    el.innerHTML = `<div class="empty"><div class="ei">📊</div><h3>COULD NOT LOAD REVENUE</h3><p>Check your connection and try again</p></div>`;
+    return;
+  }
+
+  const { history=[], grand_total=0 } = data;
+
+  const fmtDate = dateStr => {
+    const today = new Date().toISOString().slice(0,10);
+    const yest  = new Date(Date.now()-86400000).toISOString().slice(0,10);
+    if(dateStr===today) return 'Today';
+    if(dateStr===yest)  return 'Yesterday';
+    const d = new Date(dateStr+'T00:00:00');
+    return d.toLocaleDateString('en-KE',{weekday:'short',day:'numeric',month:'short'});
+  };
+
+  // Max total for bar width scaling
+  const maxTotal = history.length ? Math.max(...history.map(d=>d.total), 1) : 1;
+
+  const rows = history.length
+    ? history.map(d => {
+        const barPct = Math.round((d.total/maxTotal)*100);
+        return `
+        <div style="background:var(--dark3);border-radius:10px;padding:14px 16px;margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-weight:700;font-size:.9rem">${fmtDate(d.date)}</span>
+            <span style="font-family:var(--fh);color:var(--green);font-size:1.05rem;letter-spacing:1px">KES ${d.total.toLocaleString()}</span>
+          </div>
+          <!-- Progress bar -->
+          <div style="height:4px;background:var(--line);border-radius:2px;margin-bottom:8px;overflow:hidden">
+            <div style="height:100%;width:${barPct}%;background:var(--green);border-radius:2px;transition:width .4s"></div>
+          </div>
+          <div style="display:flex;gap:16px;font-size:.75rem;color:var(--muted)">
+            <span>📦 ${d.orders} order${d.orders!==1?'s':''}</span>
+            <span>🍗 Food: KES ${d.food_revenue.toLocaleString()}</span>
+            <span>🏍️ Delivery: KES ${d.delivery_revenue.toLocaleString()}</span>
+          </div>
+        </div>`}).join('')
+    : `<div class="empty" style="padding:30px"><div class="ei">📊</div><p style="font-size:.82rem">No deliveries completed in this period</p></div>`;
+
+  el.innerHTML = `
+    <!-- Header with period selector -->
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <div class="a-sec-t" style="margin:0">REVENUE HISTORY</div>
+      <select id="rev-days-sel" class="inp" style="width:auto;padding:8px 12px;font-size:.82rem"
+        onchange="renderAdminRevenue()">
+        <option value="7"  ${days===7 ?'selected':''}>Last 7 days</option>
+        <option value="30" ${days===30?'selected':''}>Last 30 days</option>
+        <option value="90" ${days===90?'selected':''}>Last 90 days</option>
+        <option value="365" ${days===365?'selected':''}>Last year</option>
+      </select>
+    </div>
+
+    <!-- Grand total card -->
+    <div style="background:var(--dark2);border:1px solid var(--line2);border-radius:var(--r);padding:18px 20px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-size:.75rem;color:var(--muted);letter-spacing:1px;margin-bottom:4px">TOTAL REVENUE · ${days} DAYS</div>
+        <div style="font-family:var(--fh);font-size:2rem;color:var(--green);letter-spacing:2px">KES ${grand_total.toLocaleString()}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:.75rem;color:var(--muted);margin-bottom:4px">DAYS WITH ORDERS</div>
+        <div style="font-family:var(--fh);font-size:1.6rem">${history.length}</div>
+      </div>
+    </div>
+
+    <!-- Daily rows -->
+    ${rows}
+  `;
+}
 
 async function addMenuItem() {
     const name        = document.getElementById('new-item-name')?.value.trim();
@@ -2485,6 +2912,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // onAuthStateChange lives OUTSIDE DOMContentLoaded at the top level
 supa.auth.onAuthStateChange((event, session) => {
+  // don't override if user arrived via ?role= URL
+    const urlRole = new URLSearchParams(window.location.search).get('role');
+  if(urlRole) return; // let URL role take priority
+  
   if(event === 'SIGNED_IN' && role !== 'admin'){
     role = 'admin';
     launchAdmin();
@@ -2624,15 +3055,7 @@ function startOrderRealtime(oid){
     },()=>{
       renderTracking(oid);
     })
-    // Notifies customer when rider opens the chat (rider→customer direction)
-    .on('broadcast',{event:'chat_request'},({payload})=>{
-      if(!document.getElementById('chat-sheet')?.classList.contains('on')){
-        const name = payload.riderName || 'Your rider';
-        toast(`💬 ${name} wants to chat about the delivery fee!`, 'ok', 6000);
-        playBeep();
-      }
-    })
-    // Background msg listener — notifies customer when rider sends a msg while chat is closed
+    // Background chat listener — notifies customer when rider sends a msg while chat is closed
     .on('broadcast',{event:'msg'},({payload})=>{
       if(!chatMsgs[oid]) chatMsgs[oid]=[];
       chatMsgs[oid].push(payload);
@@ -2659,24 +3082,6 @@ function loadChatMsgs(){
     const raw = localStorage.getItem('mb_chat');
     if(raw) chatMsgs = JSON.parse(raw);
   }catch{}
-}
-
-// ── Rider fee agreement helpers ──────────────────────────────────────────────
-function setAgreedFeeAndSend(amount, label){
-  riderState.agreedFee = amount;
-  try{ localStorage.setItem('kfc_agreed_fee', amount); }catch{}
-  // Send the fee suggestion as a chat message too
-  document.getElementById('chat-inp').value = label + ' delivery fee — do you agree?';
-  sendChatMsg();
-  toast(`Fee set to KES ${amount} ✅`, 'ok', 2000);
-}
-
-function promptAgreedFee(){
-  const fee = prompt('Enter the agreed delivery fee (KES):');
-  if(!fee || isNaN(parseInt(fee)) || parseInt(fee) <= 0){
-    toast('Enter a valid amount','err'); return;
-  }
-  setAgreedFeeAndSend(parseInt(fee), 'KES ' + parseInt(fee));
 }
 
 function ensureChatSheet(){
@@ -2707,23 +3112,37 @@ function ensureChatSheet(){
 
 function openChat(orderId, myRole){
   ensureChatSheet();
-  // restore existing messages for this order
-chatOrderId=orderId; chatMyRole=myRole;
-if(!chatMsgs[orderId]) chatMsgs[orderId]=[];
-renderChatMessages();
+  chatOrderId=orderId; chatMyRole=myRole;
+  // Restore from localStorage if not in memory
+  if(!chatMsgs[orderId]){
+    try{
+      const saved = localStorage.getItem('kfc_chat_'+orderId);
+      chatMsgs[orderId] = saved ? JSON.parse(saved) : [];
+    }catch{ chatMsgs[orderId] = []; }
+  }
+  renderChatMessages();
 
   // Quick-suggestion buttons (rider only)
   const qb=document.getElementById('chat-quick-btns');
   if(myRole==='rider'){
     qb.innerHTML=['KES 50','KES 100','KES 150','KES 200','KES 300','KES 500'].map(fee=>
-      `<button class="btn btn-ghost btn-sm" style="font-size:.75rem" onclick="setAgreedFeeAndSend(${parseInt(fee.replace(/\D/g,''))},'${fee}')">${fee}</button>`
-    ).join('') + `<button class="btn btn-primary btn-sm" style="font-size:.75rem;margin-top:6px;width:100%;background:var(--green)" 
-      onclick="promptAgreedFee()">✅ Set Custom Fee</button>`;
+      `<button class="btn btn-ghost btn-sm" style="font-size:.75rem" onclick="quickFee('${fee}')">${fee}</button>`
+    ).join('') +  `<button class="btn btn-primary btn-sm" style="font-size:.75rem;margin-top:6px;width:100%" 
+    onclick="setAgreedFee()">✅ Fee Agreed — Set Amount</button>`;
   } else {
     qb.innerHTML=['Sounds good! ✅','Can you do less?','KES 100 is fine','I accept 👍'].map(t=>
       `<button class="btn btn-ghost btn-sm" style="font-size:.75rem" onclick="quickFee('${t}')">${t}</button>`
     ).join('');
   }
+
+  function setAgreedFee(){
+  const fee = prompt('Enter the agreed delivery fee (KES):');
+  if(!fee || isNaN(parseInt(fee))) return;
+  riderState.agreedFee = parseInt(fee);
+  localStorage.setItem('kfc_agreed_fee', fee);
+  toast(`Fee set: KES ${fee} ✅`,'ok');
+  closeChat();
+}
 
   // Realtime broadcast channel for this order chat
   if(chatChannel){ chatChannel.unsubscribe().catch(()=>{}); }
@@ -2737,23 +3156,15 @@ renderChatMessages();
     })
     .subscribe();
 
-  // Notify the OTHER party that someone opened the chat
-  setTimeout(async()=>{
     if(myRole === 'customer'){
-      // Customer → notify rider
-      await chatChannel.send({
-        type:'broadcast', event:'chat_request',
-        payload:{ orderId, from:'customer', customerName: user.name }
-      });
-    } else if(myRole === 'rider'){
-      // Rider → notify customer via the order-track channel they're subscribed to
-      const trackChannel = supa.channel('order-track-'+orderId);
-      await trackChannel.send({
-        type:'broadcast', event:'chat_request',
-        payload:{ orderId, from:'rider', riderName: riderState.name || 'Your rider' }
-      });
-    }
+  // Notify the rider a customer wants to chat
+  setTimeout(async()=>{
+    await chatChannel.send({
+      type:'broadcast', event:'chat_request',
+      payload:{ orderId, customerName: user.name }
+    });
   }, 500);
+  } // end if myRole==='customer'
 
   document.getElementById('chat-ov').classList.add('on');
   document.getElementById('chat-sheet').classList.add('on');
@@ -2786,6 +3197,8 @@ async function sendChatMsg(){
   };
   if(!chatMsgs[chatOrderId]) chatMsgs[chatOrderId]=[];
   chatMsgs[chatOrderId].push(msg);
+  // After chatMsgs[orderId].push(msg) in sendChatMsg() and the broadcast listener, add:
+localStorage.setItem('kfc_chat_'+chatOrderId, JSON.stringify(chatMsgs[chatOrderId]));
   saveChatMsgs(); // persist before broadcast
   renderChatMessages();
   // Broadcast to the other side

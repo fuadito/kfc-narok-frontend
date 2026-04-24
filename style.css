@@ -1978,6 +1978,7 @@ a {
 /* ADMIN */
 .a-tabs {
     display:flex;
+    flex-wrap:wrap;
     gap:4px;
     padding:12px 16px 0;
     max-width:500px;
@@ -1985,11 +1986,12 @@ a {
 }
 .a-tab {
     flex:1;
-    padding:9px 7px;
+    min-width:calc(20% - 4px);
+    padding:9px 6px;
     border-radius:var(--r);
-    font-size:.7rem;
+    font-size:.67rem;
     font-weight:700;
-    letter-spacing:.06em;
+    letter-spacing:.04em;
     text-transform:uppercase;
     text-align:center;
     background:var(--dark2);
@@ -1997,6 +1999,7 @@ a {
     border:1px solid var(--line);
     transition:all var(--dur);
     cursor:pointer;
+    white-space:nowrap;
 }
 .a-tab.on {
     background:var(--red);
@@ -2348,4 +2351,32 @@ a {
     font-size:.83rem;
     text-align:left;
     margin-bottom:10px;
+}
+
+/* ── Location Map Picker ───────────────────────────────────────────── */
+#loc-map .leaflet-container {
+    background: var(--dark3);
+    font-family: var(--fb);
+}
+/* Make Leaflet controls match dark theme */
+#loc-map .leaflet-control-zoom a {
+    background: var(--dark2);
+    color: var(--white);
+    border-color: var(--line2);
+}
+#loc-map .leaflet-control-zoom a:hover {
+    background: var(--dark3);
+}
+/* Search results dropdown */
+#loc-search-results::-webkit-scrollbar { width: 4px; }
+#loc-search-results::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 4px; }
+
+/* Error box in loc panel */
+#loc-err-box {
+    background: rgba(220,38,38,.15);
+    border: 1px solid rgba(220,38,38,.4);
+    color: #f87171;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: .82rem;
 }
