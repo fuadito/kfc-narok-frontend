@@ -230,6 +230,20 @@ async function apiFetch(path, opts={}) {
   } catch { return null; }
 }
 
+// Inject chat-banner slide animation once
+(function(){
+  if(document.getElementById('mb-anim-style')) return;
+  const st = document.createElement('style');
+  st.id = 'mb-anim-style';
+  st.textContent = `
+    @keyframes slideDown {
+      from { transform: translateY(-100%); opacity:0; }
+      to   { transform: translateY(0);     opacity:1; }
+    }
+  `;
+  document.head.appendChild(st);
+})();
+
 // TOAST
 function toast(msg, type='', ms=3000){
     const c=document.getElementById('toasts');
@@ -745,12 +759,33 @@ return;
   }
 }
 
+function goLanding (){
+  role=null;
+  screen('s-landing');
+}
+
 function exitRole(){
   role=null; cart=[]; active0Id=null; foodR=0; riderR=0;
   kDone=0; kOrders=[];
   if(kInterval){ clearInterval(kInterval); kInterval=null; }
   if(_locInterval){ clearInterval(_locInterval); _locInterval=null; }
   if(_clockInterval){ clearInterval(_clockInterval); _clockInterval=null; }
+  if(trackInterval){    clearInterval(trackInterval);    trackInterval=null; }
+
+  // Unsubscribe all Supabase Realtime channels so no ghost listeners remain
+  try {
+    supa.channel('admin-orders-watch').unsubscribe().catch(()=>{});
+    supa.channel('kitchen-orders').unsubscribe().catch(()=>{});
+    supa.channel('rider-dispatch').unsubscribe().catch(()=>{});
+    if(chatChannel){ chatChannel.unsubscribe().catch(()=>{}); chatChannel=null; }
+    if(riderState?.phone){
+      supa.channel('rider-assigned-'+riderState.phone).unsubscribe().catch(()=>{});
+    }
+    if(active0Id){
+      supa.channel('order-chat-'+active0Id).unsubscribe().catch(()=>{});
+    }
+  } catch(e){}
+
   riderState={name:'',phone:'',rating:0,deliveries:0,online:false,regStep:0,regData:{},activeOrder:null,collected:false,todayTrips:0,todayEarnings:0};
   localStorage.removeItem('kfc_kitchen');
 
@@ -768,6 +803,7 @@ let curCat='Brand New'
 
 async function launchCustomer(){
     screen('s-customer');
+    requestNotifPermission(); // ask for browser notification permission on first launch
     const h=new Date().getHours();
     document.getElementById('c-greet').textContent=`${h<12?'Good morning':h<17?'Good afternoon':'Good evening'}, ${user.name}!`;
     // Fetch menu from backend, fall back to hardcoded MENU if offline
@@ -1549,8 +1585,9 @@ function showTracking(oid){
 
     renderTracking(oid);
     startOrderRealtime(oid); // FIX: get instant status updates instead of waiting for next poll
-    const iv=setInterval(()=>renderTracking(oid),12000);
-    setTimeout(()=>clearInterval(iv),300000);
+    if(trackInterval) clearInterval(trackInterval);
+    trackInterval = setInterval(()=>renderTracking(oid), 12000);
+    setTimeout(()=>{ clearInterval(trackInterval); trackInterval=null; }, 300000);
 }
 
 async function loadHistory(){
@@ -2335,6 +2372,7 @@ function startLocTracking(){
 let kInterval=null;
 let _locInterval=null;
 let _clockInterval=null; // FIX: track location interval so it can be cleared on re-toggle
+let trackInterval=null;  // FIX: customer order tracking poll interval — cleared on exitRole
 
 function launchKitchen(){
   screen('s-kitchen');
@@ -2983,9 +3021,120 @@ function startKitchenRealtime(){
 
 // SUPABASE REALTIME - RIDER (receives order dispatches)
 
+// ─── Web Push Notifications helper ───────────────────────────────────────────
+// Requests permission once and sends a system notification that appears even
+// when the user is in another app/tab. Falls back silently if denied.
+
+async function requestNotifPermission(){
+  if(!('Notification' in window)) return;
+  if(Notification.permission === 'default'){
+    await Notification.requestPermission();
+  }
+}
+
+function sendSystemNotif(title, body, onClick){
+  if(!('Notification' in window) || Notification.permission !== 'granted') return;
+  const n = new Notification(title, {
+    body,
+    icon: 'web-app-manifest-192x192.png',
+    badge: 'favicon-96x96.png',
+    tag: 'motobite-alert',       // replaces previous notif with same tag instead of stacking
+    renotify: true,               // re-triggers even if same tag
+    requireInteraction: true,     // stays on screen until user dismisses — does NOT auto-close
+  });
+  if(onClick) n.onclick = () => { window.focus(); onClick(); n.close(); };
+}
+
+// ─── Persistent in-app banner — stays until dismissed, with resend support ──
+// Used when the user IS in the app but the chat sheet is closed.
+// Shows a sticky banner at the top with an Open Chat button and a resend timer.
+
+let _chatBannerTimer = null;
+let _chatBannerResend = null;
+
+function showChatBanner(orderId, fromName, lastMsg, myRole){
+  clearChatBanner();
+  let resendCountdown = 30; // seconds until resend button activates
+
+  const existing = document.getElementById('chat-banner');
+  if(existing) existing.remove();
+
+  const banner = document.createElement('div');
+  banner.id = 'chat-banner';
+  banner.style.cssText = `
+    position:fixed;top:0;left:0;right:0;z-index:2000;
+    background:linear-gradient(135deg,#1a1a2e,#16213e);
+    border-bottom:2px solid var(--red);
+    padding:10px 16px;display:flex;align-items:center;gap:10px;
+    animation:slideDown .3s ease;box-shadow:0 4px 20px rgba(0,0,0,.5);
+  `;
+  banner.innerHTML = `
+    <div style="font-size:1.4rem">💬</div>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:.8rem;font-weight:700;color:var(--red);letter-spacing:.5px">MESSAGE FROM ${fromName.toUpperCase()}</div>
+      <div style="font-size:.82rem;color:var(--white);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${lastMsg}</div>
+    </div>
+    <button id="chat-banner-resend" style="background:var(--dark3);color:var(--muted);border:1px solid var(--line2);border-radius:6px;padding:5px 9px;font-size:.72rem;cursor:pointer;white-space:nowrap" disabled>
+      Resend (${resendCountdown}s)
+    </button>
+    <button onclick="openChat(${orderId},'${myRole}');clearChatBanner()" 
+      style="background:var(--red);color:#fff;border:none;border-radius:8px;padding:7px 13px;font-size:.78rem;font-weight:700;cursor:pointer;white-space:nowrap">
+      Open Chat
+    </button>
+    <button onclick="clearChatBanner()" style="background:none;border:none;color:var(--muted);font-size:1.1rem;cursor:pointer;padding:0 4px">✕</button>
+  `;
+  document.body.appendChild(banner);
+
+  // Countdown to resend button
+  _chatBannerTimer = setInterval(() => {
+    resendCountdown--;
+    const btn = document.getElementById('chat-banner-resend');
+    if(!btn){ clearChatBanner(); return; }
+    if(resendCountdown <= 0){
+      btn.disabled = false;
+      btn.style.color = 'var(--white)';
+      btn.style.borderColor = 'var(--red)';
+      btn.textContent = '🔔 Resend';
+      btn.onclick = () => {
+        resendChatNotif(orderId, fromName, myRole);
+        resendCountdown = 30;
+        btn.disabled = true;
+        btn.style.color = 'var(--muted)';
+        btn.style.borderColor = 'var(--line2)';
+      };
+    } else {
+      btn.textContent = `Resend (${resendCountdown}s)`;
+    }
+  }, 1000);
+}
+
+function clearChatBanner(){
+  if(_chatBannerTimer){ clearInterval(_chatBannerTimer); _chatBannerTimer = null; }
+  document.getElementById('chat-banner')?.remove();
+}
+
+async function resendChatNotif(orderId, fromName, myRole){
+  // Resends a "ping" broadcast so the other side gets notified again
+  const ch = supa.channel('order-chat-'+orderId);
+  await ch.subscribe(async status => {
+    if(status === 'SUBSCRIBED'){
+      await ch.send({
+        type:'broadcast', event:'chat_ping',
+        payload:{ orderId, fromName, fromRole: myRole }
+      });
+      await ch.unsubscribe();
+    }
+  });
+  playBeep();
+  toast('Ping sent — they will be notified again 🔔','ok',3000);
+}
+
 function startRiderRealtime(){
   const phone=riderState.phone||user.phone;
   if(!phone) return;
+
+  // Request browser notification permission as soon as rider goes online
+  requestNotifPermission();
 
   // Unsubscribe existing channels
   supa.channel('rider-dispatch').unsubscribe().catch(()=>{});
@@ -2995,10 +3144,19 @@ function startRiderRealtime(){
     .on('broadcast',{event:'new_order'},({payload})=>{
       if(!riderState.online||riderState.activeOrder) return;
       riderState.activeOrder=payload;
+      // System notification — shows even if rider is in another app
+      '🔔 New Delivery Order!',sendSystemNotif(
+        '🔔 New Delivery Order!',
+        `Deliver to ${payload.customer_area} · KES ${payload.food_amount}`,
+        () => { rPanel('home'); renderRiderHome(); showRiderOrderAlert(payload); }
+      );
+      playBeep();
       if(document.getElementById('s-rider')?.classList.contains('on')){
         renderRiderHome();
         showRiderOrderAlert(payload);
-        playBeep();
+      } else {
+        // Rider is in app but on different screen — show persistent banner
+        showChatBanner(payload.id, 'MotoBite', `New order: deliver to ${payload.customer_area}`, 'rider');
       }
     })
     .subscribe();
@@ -3011,23 +3169,39 @@ function startRiderRealtime(){
     },({new:o})=>{
       if(o.status==='rider_assigned'&&!riderState.activeOrder){
         riderState.activeOrder=o;
+        sendSystemNotif(
+          '🔔 Order Assigned to You!',
+          `Deliver to ${o.customer_area}`,
+          () => { rPanel('home'); renderRiderHome(); showRiderOrderAlert(o); }
+        );
+        playBeep();
         renderRiderHome();
         showRiderOrderAlert(o);
-        playBeep();
       }
     })
     .subscribe();
 
+  // Listen for chat pings (resend notifications from the other side)
+  if(riderState.activeOrder?.id){
+    startRiderChatListener(riderState.activeOrder.id);
+  }
 }
 
-// Rider background chat listener — call from acceptOrder so it runs when an order exists
+// Rider background chat listener — persistent banner + system notification
 function startRiderChatListener(orderId){
   if(!orderId) return;
   supa.channel('order-chat-'+orderId).unsubscribe().catch(()=>{});
   supa.channel('order-chat-'+orderId)
     .on('broadcast',{event:'chat_request'},({payload})=>{
-      if(!document.getElementById('chat-sheet')?.classList.contains('on')){
-        toast(`💬 ${payload.customerName} wants to chat!`,'ok',6000);
+      const chatOpen = chatOrderId === orderId && document.getElementById('chat-sheet')?.classList.contains('on');
+      if(!chatOpen){
+        // System notification — works even when rider is in another app
+        sendSystemNotif(
+          `💬 ${payload.customerName} wants to chat!`,
+          'Tap to negotiate the delivery fee',
+          () => openChat(orderId, 'rider')
+        );
+        showChatBanner(orderId, payload.customerName, 'Wants to negotiate delivery fee', 'rider');
         playBeep();
       }
     })
@@ -3035,9 +3209,27 @@ function startRiderChatListener(orderId){
       if(!chatMsgs[orderId]) chatMsgs[orderId]=[];
       chatMsgs[orderId].push(payload);
       saveChatMsgs();
-      // Only show toast if chat sheet not open for this order
-      if(chatOrderId !== orderId || !document.getElementById('chat-sheet')?.classList.contains('on')){
-        toast(`💬 ${payload.name}: ${payload.text.slice(0,40)}${payload.text.length>40?'…':''}`, 'ok', 4000);
+      const chatOpen = chatOrderId === orderId && document.getElementById('chat-sheet')?.classList.contains('on');
+      if(!chatOpen){
+        sendSystemNotif(
+          `💬 ${payload.name}`,
+          payload.text.slice(0,80),
+          () => openChat(orderId, 'rider')
+        );
+        showChatBanner(orderId, payload.name, payload.text.slice(0,60), 'rider');
+        playBeep();
+      }
+    })
+    .on('broadcast',{event:'chat_ping'},({payload})=>{
+      // Other side sent a resend ping
+      const chatOpen = chatOrderId === orderId && document.getElementById('chat-sheet')?.classList.contains('on');
+      if(!chatOpen){
+        sendSystemNotif(
+          `🔔 ${payload.fromName} is waiting for your reply!`,
+          'Tap to open the chat',
+          () => openChat(orderId, 'rider')
+        );
+        showChatBanner(orderId, payload.fromName, 'Is waiting for your reply!', 'rider');
         playBeep();
       }
     })
@@ -3055,14 +3247,31 @@ function startOrderRealtime(oid){
     },()=>{
       renderTracking(oid);
     })
-    // Background chat listener — notifies customer when rider sends a msg while chat is closed
+      // Background chat listener — persistent banner + system notif for customer
     .on('broadcast',{event:'msg'},({payload})=>{
       if(!chatMsgs[oid]) chatMsgs[oid]=[];
       chatMsgs[oid].push(payload);
       saveChatMsgs();
-      // Only show toast if chat sheet isn't open for this order
-      if(chatOrderId !== oid || !document.getElementById('chat-sheet')?.classList.contains('on')){
-        toast(`💬 ${payload.name}: ${payload.text.slice(0,40)}${payload.text.length>40?'…':''}`, 'ok', 4000);
+      const chatOpen = chatOrderId === oid && document.getElementById('chat-sheet')?.classList.contains('on');
+      if(!chatOpen){
+        sendSystemNotif(
+          `💬 ${payload.name}`,
+          payload.text.slice(0,80),
+          () => openChat(oid, 'customer')
+        );
+        showChatBanner(oid, payload.name, payload.text.slice(0,60), 'customer');
+        playBeep();
+      }
+    })
+    .on('broadcast',{event:'chat_ping'},({payload})=>{
+      const chatOpen = chatOrderId === oid && document.getElementById('chat-sheet')?.classList.contains('on');
+      if(!chatOpen){
+        sendSystemNotif(
+          `🔔 ${payload.fromName} is waiting for your reply!`,
+          'Tap to open the chat',
+          () => openChat(oid, 'customer')
+        );
+        showChatBanner(oid, payload.fromName, 'Is waiting for your reply!', 'customer');
         playBeep();
       }
     })
@@ -3166,6 +3375,7 @@ function openChat(orderId, myRole){
   }, 500);
   } // end if myRole==='customer'
 
+  clearChatBanner(); // dismiss the banner now that chat is open
   document.getElementById('chat-ov').classList.add('on');
   document.getElementById('chat-sheet').classList.add('on');
   document.body.style.overflow='hidden';
