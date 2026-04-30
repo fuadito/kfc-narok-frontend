@@ -340,7 +340,7 @@ function selectRole(r){
  }
     
     setTimeout(() => {
-    const saved = localStorage.getItem('kfc_user');
+    const saved = localStorage.getItem('mb_user');
     if(saved){
         try {
             const u = JSON.parse(saved);
@@ -354,7 +354,7 @@ function selectRole(r){
                 }
             } else if(role === 'rider'){
                 const phoneEl = document.getElementById('f-phone');
-                const savedRider = localStorage.getItem('kfc_rider');
+                const savedRider = localStorage.getItem('mb_rider');
                 const rPhone = savedRider ? JSON.parse(savedRider).phone : u.phone;
                 if(phoneEl && rPhone){
                     const local = rPhone.startsWith('254') ? rPhone.slice(3) : rPhone;
@@ -422,7 +422,7 @@ async function loginCustomer() {
 
   if(customer){
     user = { name: customer.name, phone: customer.phone };
-    localStorage.setItem('kfc_user', JSON.stringify(user));
+    localStorage.setItem('mb_user', JSON.stringify(user));
     toast(`Welcome back, ${customer.name}! 👋`, 'ok');
     launchCustomer();
   } else {
@@ -494,9 +494,9 @@ const fullPhone = phone.startsWith('0')
     });
 
     if(res?.success){
-      // Save user data using the same kfc_user key the rest of the app reads
+      // Save user data using the same mb_user key the rest of the app reads
       user = { name: savedName, phone: verifiedPhone };
-      localStorage.setItem('kfc_user', JSON.stringify(user));
+      localStorage.setItem('mb_user', JSON.stringify(user));
       localStorage.removeItem('temp_name');
 
       toast(`Welcome to MotoBite, ${savedName}! 🎉`, 'ok');
@@ -645,7 +645,7 @@ async function authSubmit() {
  }
 
  if(!nameInput){
-   const saved = localStorage.getItem('kfc_user');
+   const saved = localStorage.getItem('mb_user');
    if(!saved){
      toast('No account found. Tap "Create Account" to sign up.','err');
      return reset();
@@ -672,11 +672,11 @@ async function authSubmit() {
  }
 
  // CORRECT — OTP only for new customers
-const isReturning = !!localStorage.getItem('kfc_user');
+const isReturning = !!localStorage.getItem('mb_user');
 
 if(isReturning){
   // Existing customer — skip OTP, log straight in
-  localStorage.setItem('kfc_user', JSON.stringify(user));
+  localStorage.setItem('mb_user', JSON.stringify(user));
   toast(`Welcome back, ${user.name}! 👋`,'ok');
   await apiFetch('/api/customer/login',{method:'POST',body:{phone:user.phone,name:user.name}});
   reset(); launchCustomer();
@@ -686,7 +686,7 @@ if(isReturning){
 // New customer — verify phone with OTP first
 btn.innerHTML='Continue →'; btn.disabled=false;
 sendOtpAndVerify(user.phone, async () => {
-  localStorage.setItem('kfc_user', JSON.stringify(user));
+  localStorage.setItem('mb_user', JSON.stringify(user));
   toast(`Account created! Welcome, ${user.name}! 🍗`,'ok');
   await apiFetch('/api/customer/login',{method:'POST',body:{phone:user.phone,name:user.name}});
   launchCustomer();
@@ -719,7 +719,7 @@ return;
           }
           // Approved rider — restore full state and go to dashboard
           riderState={...riderState,...data,phone:user.phone};
-          localStorage.setItem('kfc_rider',JSON.stringify({phone:user.phone}));
+          localStorage.setItem('mb_rider',JSON.stringify({phone:user.phone}));
           toast(`Welcome back, ${data.name}! 🏍️`,'ok');
           reset(); launchRider();
           return;
@@ -739,7 +739,7 @@ return;
           }
           // No account yet — go to registration steps
           riderState.phone = user.phone;
-          localStorage.setItem('kfc_rider', JSON.stringify({phone:user.phone}));
+          localStorage.setItem('mb_rider', JSON.stringify({phone:user.phone}));
           toast('Phone verified! Complete your registration 🏍️','ok');
           launchRider(); // launchRider checks !riderState.name → renderRiderReg
         });
@@ -750,7 +750,7 @@ return;
     if(!code){ toast('Enter the kitchen passcode','err'); return reset(); }
     const r=await apiFetch('/api/kitchen/verify',{method:'POST',body:{code}});
     if(!r?.ok){ toast('Wrong passcode — ask your manager','err'); return reset(); }
-    localStorage.setItem('kfc_kitchen','1');
+    localStorage.setItem('mb_kitchen','1');
     reset(); launchKitchen();
 
   } else if(role==='admin'){
@@ -787,8 +787,11 @@ function exitRole(){
   } catch(e){}
 
   riderState={name:'',phone:'',rating:0,deliveries:0,online:false,regStep:0,regData:{},activeOrder:null,collected:false,todayTrips:0,todayEarnings:0};
-  localStorage.removeItem('kfc_kitchen');
-  localStorage.removeItem('kfc_pending_order');
+  localStorage.removeItem('mb_kitchen');
+  localStorage.removeItem('mb_pending_order');
+  localStorage.removeItem('mb_active_delivery');
+  localStorage.removeItem('mb_agreed_fee');
+  localStorage.removeItem('mb_active_order');
 
   // If user arrived via ?role= URL — return to that role's login, not landing
   const urlRole = new URLSearchParams(window.location.search).get('role');
@@ -820,13 +823,13 @@ async function launchCustomer(){
     renderCats(); renderMenu('Brand New'); updateCartUI();
 
     // Restore active order on login
-      const savedOid = localStorage.getItem('kfc_active_order');
+      const savedOid = localStorage.getItem('mb_active_order');
     if(savedOid){
         const order = await apiFetch(`/api/orders/${savedOid}`);
         if(order && !['delivered','cancelled'].includes(order.status)){
             showTracking(savedOid);
         } else { 
-                   localStorage.removeItem('kfc_active_order');
+                   localStorage.removeItem('mb_active_order');
         }
     }
 }
@@ -1536,7 +1539,7 @@ if(!amountPaid || amountPaid < orderTotal){
 
   const oid=order.id;
   active0Id=oid;
-  localStorage.setItem('kfc_active_order',oid);
+  localStorage.setItem('mb_active_order',oid);
  
   // Show STK status box if the backend sent a push, otherwise keep manual instructions
     const stkBox=document.getElementById('stk-status');
@@ -1585,7 +1588,7 @@ async function confirmPayment(orderId) {
     updateCartUI();
     // Update order status
     active0Id = orderId;
-    localStorage.setItem('kfc_active_order', orderId);
+    localStorage.setItem('mb_active_order', orderId);
     // Refresh tracking to show updated status
     showTracking(orderId);
   } else {
@@ -1818,14 +1821,14 @@ async function launchRider(){
 
     // Restore active delivery if rider refreshes mid-delivery
     if(!riderState.activeOrder){
-      const saved = localStorage.getItem('kfc_active_delivery');
+      const saved = localStorage.getItem('mb_active_delivery');
       if(saved){ try{ riderState.activeOrder=JSON.parse(saved); riderState.collected=false; }catch{} }
     }
 
     // Restore a pending (dispatched but not yet accepted) order
     // This is the order the rider missed while they were in another app
     if(!riderState.activeOrder && !riderState.pendingOrder){
-      const pending = localStorage.getItem('kfc_pending_order');
+      const pending = localStorage.getItem('mb_pending_order');
       if(pending){ try{ riderState.pendingOrder=JSON.parse(pending); }catch{} }
     }
 
@@ -2069,6 +2072,8 @@ function toggleOnline(){
     if(sw) sw.classList.toggle('on',riderState.online);
     if(lbl){ lbl.nextElementSibling.textContent=riderState.online?'Receiving orders':'Tap to start receiving orders'; lbl.textContent=riderState.online?'🟢 ONLINE':'Go online'; }
     apiFetch('/api/rider/availability',{method:'POST',body:{available:riderState.online}});
+    // Persist online state — restored on page reload so rider doesn't go dark unexpectedly
+    try { const rd = JSON.parse(localStorage.getItem('mb_rider')||'{}'); rd.online = riderState.online; localStorage.setItem('mb_rider', JSON.stringify(rd)); } catch{}
     toast(riderState.online?'You are now ONLINE 🟢':'You are now offline');
     if(riderState.online) startLocTracking();
     // rider has toggled themselves online and does not currently have an active order. && = both must be true
@@ -2138,10 +2143,10 @@ function acceptOrder(){
     riderState.activeOrder = riderState.pendingOrder;
   }
   riderState.pendingOrder = null;
-  localStorage.removeItem('kfc_pending_order');
+  localStorage.removeItem('mb_pending_order');
 
   apiFetch(`/api/orders/${riderState.activeOrder.id}/accept`, {method:'POST'});
-  localStorage.setItem('kfc_active_delivery', JSON.stringify(riderState.activeOrder));
+  localStorage.setItem('mb_active_delivery', JSON.stringify(riderState.activeOrder));
 
   // Listen for chat on this order
   const orderId = riderState.activeOrder.id;
@@ -2163,7 +2168,7 @@ function declineOrder(){
   }
   riderState.activeOrder  = null;
   riderState.pendingOrder = null;
-  localStorage.removeItem('kfc_pending_order');
+  localStorage.removeItem('mb_pending_order');
   toast('Order passed');
 } 
 
@@ -2263,7 +2268,7 @@ function markCollected(){
     if(r){
     // Calculate earnings from agreed fee or order delivery_fee
     const agreedFee = riderState.agreedFee
-      || parseInt(localStorage.getItem('kfc_agreed_fee'))
+      || parseInt(localStorage.getItem('mb_agreed_fee'))
       || riderState.activeOrder?.delivery_fee
       || 0;
 
@@ -2271,13 +2276,13 @@ function markCollected(){
     riderState.todayTrips++; riderState.deliveries++;
     riderState.todayEarnings = (riderState.todayEarnings || 0) + agreedFee;
     riderState.agreedFee = 0;
-    localStorage.removeItem('kfc_agreed_fee');
+    localStorage.removeItem('mb_agreed_fee');
 
     document.querySelectorAll('#s-rider .bnav-btn').forEach(b=>b.classList.toggle('on',b.dataset.s==='home'));
     renderRiderHome();
     toast(`🎉 PIN correct! Delivery complete${agreedFee ? ` · KES ${agreedFee} earned` : ''}. Collect cash from customer.`,'ok',6000);
-    localStorage.removeItem('kfc_active_delivery');
-    localStorage.removeItem('kfc_chat_'+riderState.activeOrder?.id);
+    localStorage.removeItem('mb_active_delivery');
+    localStorage.removeItem('mb_chat_'+riderState.activeOrder?.id);
   } else {
     for(let i=0;i<4;i++){const el=document.getElementById(`p${i}`); if(el)el.classList.add('err');}
     pinBuf=''; setTimeout(updatePinDisplay,600);
@@ -2927,7 +2932,20 @@ async function toggleMenuItem(id,el) {
 
 // RESTORE SESSION
 document.addEventListener('DOMContentLoaded', async () => {
-  const saved = localStorage.getItem('kfc_user');
+
+  // Register Service Worker for background notifications (Android Chrome requires this)
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.register('/sw.js').catch(()=>{});
+    // When user taps a background notification, the SW sends NOTIF_CLICK
+    // and we invoke whatever callback was stored at the time the notif was sent
+    navigator.serviceWorker.addEventListener('message', e => {
+      if(e.data?.type === 'NOTIF_CLICK' && window._notifClickCb){
+        window._notifClickCb();
+        window._notifClickCb = null;
+      }
+    });
+  }
+  const saved = localStorage.getItem('mb_user');
   if(saved){ try{ user=JSON.parse(saved); }catch{} }
   loadChatMsgs(); // restore chat history across sessions
 
@@ -2941,7 +2959,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if(urlRole === 'customer'){ selectRole('customer');   return; }
 
   // No ?role= in URL — restore previous session as normal
-  if(localStorage.getItem('kfc_kitchen')){
+  if(localStorage.getItem('mb_kitchen')){
     role = 'kitchen'; launchKitchen(); return;
   }
 
@@ -2949,7 +2967,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     role = 'customer'; launchCustomer(); return;
   }
 
-  const savedRider = localStorage.getItem('kfc_rider');
+  const savedRider = localStorage.getItem('mb_rider');
   if(savedRider){
     try{
       const rd = JSON.parse(savedRider);
@@ -2957,15 +2975,17 @@ document.addEventListener('DOMContentLoaded', async () => {
       const data = await apiFetch('/api/rider/login',{method:'POST',body:{phone:rd.phone}});
       if(data && data.name && data.status === 'approved'){
         riderState = {...riderState, ...data, phone:rd.phone};
+        // Restore online toggle state — rider shouldn't have to re-toggle after refresh
+        if(rd.online) riderState.online = true;
         role = 'rider'; launchRider();
         // Restore chat listener if rider had an active order before refresh
         if(riderState.activeOrder?.id) startRiderChatListener(riderState.activeOrder.id);
         return;
       } else {
-        localStorage.removeItem('kfc_rider');
+        localStorage.removeItem('mb_rider');
       }
     }catch{
-      localStorage.removeItem('kfc_rider');
+      localStorage.removeItem('mb_rider');
     }
   }
 
@@ -3060,17 +3080,41 @@ async function requestNotifPermission(){
   }
 }
 
-function sendSystemNotif(title, body, onClick){
+async function sendSystemNotif(title, body, onClick){
   if(!('Notification' in window) || Notification.permission !== 'granted') return;
-  const n = new Notification(title, {
+
+  const opts = {
     body,
-    icon: 'web-app-manifest-192x192.png',
-    badge: 'favicon-96x96.png',
-    tag: 'motobite-alert',       // replaces previous notif with same tag instead of stacking
-    renotify: true,               // re-triggers even if same tag
-    requireInteraction: true,     // stays on screen until user dismisses — does NOT auto-close
-  });
-  if(onClick) n.onclick = () => { window.focus(); onClick(); n.close(); };
+    icon:             'web-app-manifest-192x192.png',
+    badge:            'favicon-96x96.png',
+    tag:              'motobite-alert',  // replaces previous notif instead of stacking
+    renotify:         true,              // re-triggers sound/vibration even with same tag
+    requireInteraction: true,            // stays on screen — does NOT auto-close
+    vibrate:          [200, 100, 200],   // vibration pattern on mobile
+  };
+
+  // Prefer ServiceWorker.showNotification — works on Android Chrome even when
+  // the tab is in the background (new Notification() is blocked in that case).
+  if('serviceWorker' in navigator){
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      await reg.showNotification(title, opts);
+      // ServiceWorker notifications don't support onclick directly —
+      // the SW must post a message. Store the callback so sw-click can invoke it.
+      window._notifClickCb = onClick;
+      return;
+    } catch(e) {
+      // SW not registered or showNotification failed — fall through to new Notification()
+    }
+  }
+
+  // Fallback: new Notification() — works when tab is visible / on desktop
+  try {
+    const n = new Notification(title, opts);
+    if(onClick) n.onclick = () => { window.focus(); onClick(); n.close(); };
+  } catch(e) {
+    console.warn('Notification failed:', e.message);
+  }
 }
 
 // ─── Persistent in-app banner — stays until dismissed, with resend support ──
@@ -3157,11 +3201,12 @@ async function resendChatNotif(orderId, fromName, myRole){
   toast('Ping sent — they will be notified again 🔔','ok',3000);
 }
 
-function startRiderRealtime(){
+async function startRiderRealtime(){
   const phone=riderState.phone||user.phone;
   if(!phone) return;
 
-  requestNotifPermission();
+  // Await permission so the dialog completes before any notification fires
+  await requestNotifPermission();
 
   // ── Clean up any stale channels before re-subscribing ────────────────────
   supa.channel('rider-dispatch').unsubscribe().catch(()=>{});
@@ -3178,7 +3223,7 @@ function startRiderRealtime(){
     // tabs/apps and came back, the dispatch broadcast was long gone and
     // riderState was reset, so the order vanished.
     riderState.pendingOrder = payload;   // keep pending until accepted/expired
-    localStorage.setItem('kfc_pending_order', JSON.stringify(payload));
+    localStorage.setItem('mb_pending_order', JSON.stringify(payload));
 
     // BUG FIX 2: System notification fires correctly.
     // Previously had a stray string literal before sendSystemNotif():
@@ -3386,7 +3431,7 @@ function openChat(orderId, myRole){
   // Restore from localStorage if not in memory
   if(!chatMsgs[orderId]){
     try{
-      const saved = localStorage.getItem('kfc_chat_'+orderId);
+      const saved = localStorage.getItem('mb_chat_'+orderId);
       chatMsgs[orderId] = saved ? JSON.parse(saved) : [];
     }catch{ chatMsgs[orderId] = []; }
   }
@@ -3409,7 +3454,7 @@ function openChat(orderId, myRole){
   const fee = prompt('Enter the agreed delivery fee (KES):');
   if(!fee || isNaN(parseInt(fee))) return;
   riderState.agreedFee = parseInt(fee);
-  localStorage.setItem('kfc_agreed_fee', fee);
+  localStorage.setItem('mb_agreed_fee', fee);
   toast(`Fee set: KES ${fee} ✅`,'ok');
   closeChat();
 }
@@ -3469,7 +3514,7 @@ async function sendChatMsg(){
   if(!chatMsgs[chatOrderId]) chatMsgs[chatOrderId]=[];
   chatMsgs[chatOrderId].push(msg);
   // After chatMsgs[orderId].push(msg) in sendChatMsg() and the broadcast listener, add:
-localStorage.setItem('kfc_chat_'+chatOrderId, JSON.stringify(chatMsgs[chatOrderId]));
+localStorage.setItem('mb_chat_'+chatOrderId, JSON.stringify(chatMsgs[chatOrderId]));
   saveChatMsgs(); // persist before broadcast
   renderChatMessages();
   // Broadcast to the other side
