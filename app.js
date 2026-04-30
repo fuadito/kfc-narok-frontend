@@ -1271,8 +1271,8 @@ function initLocMap(){
   // Update status bar every time the pin moves
   _locMarker.on('drag dragend', () => updateLocStatus());
 
-  setLocStatus('🔵 Drag the blue pin to your exact delivery address');
-  enableLocBtn(false);
+  setLocStatus('🔵 Map centred on Narok Town. Drag the blue pin to your exact delivery address, or search above.');
+  enableLocBtn(true); // allow immediate manual placement — don't block on GPS
 
   // Try GPS — async, non-blocking
   tryGPS();
@@ -1293,35 +1293,58 @@ function tryGPS(){
 
 function onGPSSuccess(pos){
   const { latitude: lat, longitude: lng, accuracy } = pos.coords;
-  _gpsLat = lat; _gpsLng = lng;
 
-  // Move pin and map to GPS position
+  const distFromKFC = haversine(lat, lng, KFC_LAT, KFC_LNG);
+
+  // If the returned position is outside the 50 km zone it is almost certainly
+  // an IP-based ISP estimate (e.g. Nairobi) rather than the device's real GPS.
+  // Never move the map in that case — keep it centred on Narok Town so the
+  // customer can drag the pin to their actual address.
+  if(distFromKFC > MAX_KM){
+    _gpsLat = null; _gpsLng = null; // discard — useless for re-centring too
+    setLocStatus(
+      `⚠️ GPS returned a location ${Math.round(distFromKFC)} km away — ` +
+      `this is likely your internet provider's address, not yours. ` +
+      `Drag the blue pin to your actual location in Narok.`
+    );
+    enableLocBtn(true);  // let them place manually
+    return;
+  }
+
+  // Within zone — safe to trust this position
+  _gpsLat = lat; _gpsLng = lng;
   _locMap.setView([lat, lng], 16);
   _locMarker.setLatLng([lat, lng]);
 
-  const accText = accuracy < 50  ? '✅ High accuracy'
-                : accuracy < 200 ? '⚠️ Moderate accuracy — drag pin if needed'
-                :                  '⚠️ Low accuracy — drag pin to exact spot';
-  setLocStatus(`${accText} (±${Math.round(accuracy)}m) · Drag pin to correct`);
+  const accText = accuracy < 50  ? '✅ High accuracy GPS'
+                : accuracy < 200 ? '⚠️ Moderate GPS accuracy — drag pin if needed'
+                :                  '⚠️ Low GPS accuracy — drag pin to your exact spot';
+  setLocStatus(`${accText} (±${Math.round(accuracy)}m)`);
   updateLocStatus();
 }
 
 function onGPSFail(err){
   _gpsLat = null; _gpsLng = null;
   const msg = err.code === 1
-    ? '🔒 GPS access denied — drag the pin to your location'
+    ? '🔒 GPS access denied — drag the pin to your delivery address'
     : '⚠️ GPS unavailable — drag the pin to your location';
   setLocStatus(msg);
-  // Leave map centred on Narok so customer can still drag
-  enableLocBtn(true); // let them pick manually even without GPS
+  enableLocBtn(true); // map is already centred on Narok — just let them drag
 }
 
 function recenterOnGPS(){
-  if(_gpsLat){
+  if(_gpsLat && _gpsLng){
+    // Only re-centre if the stored GPS position is actually in the delivery zone
+    const dist = haversine(_gpsLat, _gpsLng, KFC_LAT, KFC_LNG);
+    if(dist > MAX_KM){
+      setLocStatus(`⚠️ GPS position is ${Math.round(dist)} km away — looks like an ISP address. Drag the pin manually.`);
+      return;
+    }
     _locMap.setView([_gpsLat, _gpsLng], 17);
     _locMarker.setLatLng([_gpsLat, _gpsLng]);
     updateLocStatus();
   } else {
+    setLocStatus('<span class="spin" style="display:inline-block;vertical-align:middle;margin-right:6px"></span>Trying GPS again…');
     tryGPS();
   }
 }
