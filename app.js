@@ -769,7 +769,6 @@ function exitRole(){
   kDone=0; kOrders=[];
   if(kInterval){ clearInterval(kInterval); kInterval=null; }
   if(_locInterval){ clearInterval(_locInterval); _locInterval=null; }
-  if(_riderPollInterval){ clearInterval(_riderPollInterval); _riderPollInterval=null; }
   if(_clockInterval){ clearInterval(_clockInterval); _clockInterval=null; }
   if(trackInterval){    clearInterval(trackInterval);    trackInterval=null; }
 
@@ -1838,13 +1837,6 @@ async function launchRider(){
         renderRiderReg();
     } else {
         renderRiderHome();
-        // Poll immediately on launch — catches any order dispatched while logged out
-        setTimeout(async () => {
-          if(riderState.online && !riderState.activeOrder){
-            const data = await apiFetch('/api/rider/active-order');
-            if(data?.order) handleIncomingOrder(data.order);
-          }
-        }, 1500);
         if(riderState.activeOrder){
           // Already on a delivery — go straight to delivery tab
           rPanel('delivery', document.querySelector('[data-s="delivery"]'));
@@ -2066,7 +2058,7 @@ function renderRiderHome(){
       </div>
       <div class="stats2">
         <div class="sm"><div class="sm-v" id="r-trips">${riderState.todayTrips}</div><div class="sm-l">Today's Trips</div></div>
-        <div class="sm"><div class="sm-v" id="r-earn">KES ${riderState.todayEarnings||0}</div><div class="sm-l">Today's Earnings</div></div>
+        <div class="sm-v" id="r-earn">KES ${riderState.todayEarnings||0}</div><<div class="sm-l">Today's Earnings</div></div>
         <div class="sm"><div class="sm-v">${riderState.deliveries}</div><div class="sm-l">Total Trips</div></div>
         <div class="sm"><div class="sm-v" style="color:var(--green)">${riderState.rating}</div><div class="sm-l">Rating</div></div>
       </div>
@@ -3209,76 +3201,81 @@ async function resendChatNotif(orderId, fromName, myRole){
   toast('Ping sent — they will be notified again 🔔','ok',3000);
 }
 
-// ─── Rider poll interval — fires when tab comes back from background ──────────
-let _riderPollInterval = null;
-let _lastSeenOrderId   = null;   // tracks what we already showed so we don't re-alert
+async function startRiderRealtime(){
+  const phone=riderState.phone||user.phone;
+  if(!phone) return;
 
-// Central handler — called by Realtime broadcast, Postgres fallback AND the
-// visibility-change poll. All paths converge here so behaviour is identical.
-function handleIncomingOrder(payload){
-  if(riderState.activeOrder) return;           // already on a delivery
-  if(!riderState.online) return;               // rider is offline
-  // De-duplicate: don't re-show the alert if we already have this order pending
-  if(riderState.pendingOrder?.id === payload.id) return;
+  // Await permission so the dialog completes before any notification fires
+  await requestNotifPermission();
 
-  // Persist immediately — survives tab switch, background, refresh
-  riderState.pendingOrder = payload;
-  localStorage.setItem('mb_pending_order', JSON.stringify(payload));
+  // ── Clean up any stale channels before re-subscribing ────────────────────
+  supa.channel('rider-dispatch').unsubscribe().catch(()=>{});
+  supa.channel('rider-assigned-'+phone).unsubscribe().catch(()=>{});
 
-  // System notification — shows even when rider is in another app / phone locked
-  sendSystemNotif(
-    '🔔 New Delivery Order!',
-    `Deliver to ${payload.customer_area} · KES ${payload.delivery_fee || payload.food_amount}`,
-    () => {
-      window.focus();
-      const homeBtn = document.querySelector('#s-rider .bnav-btn[data-s="home"]');
-      rPanel('home', homeBtn);
-      requestAnimationFrame(() => showRiderOrderAlert(payload));
-    }
-  );
+  // ── Handler shared by both dispatch broadcast AND postgres direct-assign ──
+  // Extracted so the exact same logic fires regardless of delivery path.
+  function handleIncomingOrder(payload){
+    // Guard: don't accept if already on a delivery
+    if(riderState.activeOrder) return;
 
-  playBeep();
+    // BUG FIX 1: Store order in BOTH riderState AND localStorage immediately.
+    // Previously the order was only set in riderState — if the rider switched
+    // tabs/apps and came back, the dispatch broadcast was long gone and
+    // riderState was reset, so the order vanished.
+    riderState.pendingOrder = payload;   // keep pending until accepted/expired
+    localStorage.setItem('mb_pending_order', JSON.stringify(payload));
 
-  // Always navigate home first so #r-alert-zone exists, then inject alert
-  const homeBtn = document.querySelector('#s-rider .bnav-btn[data-s="home"]');
-  if(document.getElementById('s-rider')?.classList.contains('on')){
+    // BUG FIX 2: System notification fires correctly.
+    // Previously had a stray string literal before sendSystemNotif():
+    //   '🔔 New Delivery Order!', sendSystemNotif(...)
+    // That made sendSystemNotif a comma-expression arg — the onClick callback
+    // was never registered, so tapping the notification did nothing.
+    sendSystemNotif(
+      '🔔 New Delivery Order!',
+      `Deliver to ${payload.customer_area} · KES ${payload.delivery_fee || payload.food_amount}`,
+      () => {
+        window.focus();
+        // BUG FIX 3: rPanel('home') without a btn arg leaves the nav tab
+        // highlight on whichever tab the rider was on. Pass the actual DOM button.
+        const homeBtn = document.querySelector('#s-rider .bnav-btn[data-s="home"]');
+        rPanel('home', homeBtn);
+        // BUG FIX 4: renderRiderHome() creates a fresh #r-alert-zone but
+        // showRiderOrderAlert() reads that element immediately after — in the
+        // same synchronous call stack, before the browser has painted.
+        // A single rAF ensures the DOM is settled before we inject the alert HTML.
+        requestAnimationFrame(() => showRiderOrderAlert(payload));
+      }
+    );
+
+    playBeep();
+
+    // BUG FIX 5: The old check was `s-rider.classList.contains('on')` which
+    // is true whenever the rider section is the active screen — but the rider
+    // could be on the Earnings or Delivery tab, where #r-alert-zone doesn't
+    // exist yet (it's only created inside renderRiderHome's innerHTML).
+    // Solution: always navigate home AND show the alert, whether the rider
+    // is in the app or not.
+    const homeBtn = document.querySelector('#s-rider .bnav-btn[data-s="home"]');
     rPanel('home', homeBtn);
     requestAnimationFrame(() => showRiderOrderAlert(payload));
   }
 
-  // Persistent banner for when rider is in another app but browser is open
-  showChatBanner(
-    payload.id,
-    'MotoBite',
-    `New order → ${payload.customer_area} · KES ${payload.delivery_fee || payload.food_amount}`,
-    'rider'
-  );
-}
-
-async function startRiderRealtime(){
-  const phone = riderState.phone || user.phone;
-  if(!phone) return;
-
-  await requestNotifPermission();
-
-  // Clean up stale channels
-  try { supa.channel('rider-dispatch').unsubscribe(); } catch{}
-  try { supa.channel('rider-assigned-'+phone).unsubscribe(); } catch{}
-
-  // ── 1. Supabase Broadcast — primary fast path ─────────────────────────────
+  // ── Broadcast channel — backend dispatches new orders here ───────────────
   supa.channel('rider-dispatch')
     .on('broadcast', { event:'new_order' }, ({ payload }) => {
+      if(!riderState.online || riderState.activeOrder) return;
       handleIncomingOrder(payload);
     })
     .subscribe(status => {
-      console.log('[Realtime] rider-dispatch:', status);
+      // BUG FIX: Reconnect automatically if Supabase drops the channel
+      // (happens when browser tab goes to background for >30 s on some devices)
       if(status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED'){
-        console.warn('[Realtime] channel lost — reconnecting in 4 s');
-        setTimeout(startRiderRealtime, 4000);
+        console.warn('[Realtime] rider-dispatch channel lost, reconnecting in 3 s…');
+        setTimeout(startRiderRealtime, 3000);
       }
     });
 
-  // ── 2. Postgres fallback — direct DB assignment (admin manual assign) ─────
+  // ── Postgres fallback — catches direct DB assignment (admin overrides) ───
   supa.channel('rider-assigned-'+phone)
     .on('postgres_changes', {
       event:'UPDATE', schema:'public', table:'orders',
@@ -3290,47 +3287,7 @@ async function startRiderRealtime(){
     })
     .subscribe();
 
-  // ── 3. Visibility-change poll — catches orders missed while backgrounded ──
-  // Supabase Realtime disconnects after ~30 s in background on mobile Chrome.
-  // When the rider returns to the tab, we poll once immediately to catch up.
-  // We also poll every 20 s while the tab is visible, as a belt-and-suspenders
-  // safety net in case the Realtime connection is silently dead.
-
-  async function pollForPendingOrder(){
-    if(riderState.activeOrder || !riderState.online) return;
-    try {
-      // Ask the backend: is there a 'ready' order currently assigned to me
-      // or dispatched to me that I haven't acknowledged yet?
-      const data = await apiFetch('/api/rider/active-order');
-      if(data?.order && !riderState.activeOrder){
-        handleIncomingOrder(data.order);
-      }
-      // Also check if there's an unaccepted pending order saved in localStorage
-      const saved = localStorage.getItem('mb_pending_order');
-      if(saved && !riderState.pendingOrder){
-        try {
-          const o = JSON.parse(saved);
-          // Only resurface if the order is less than 3 minutes old
-          const age = (Date.now() - new Date(o.paid_at || o.created_at).getTime()) / 1000;
-          if(age < 180) handleIncomingOrder(o);
-          else localStorage.removeItem('mb_pending_order');
-        } catch{}
-      }
-    } catch(e){ console.warn('Poll error:', e.message); }
-  }
-
-  // Poll immediately when tab becomes visible again (rider returns from another app)
-  document.addEventListener('visibilitychange', () => {
-    if(!document.hidden) pollForPendingOrder();
-  });
-
-  // Periodic safety-net poll every 20 s while tab is visible
-  if(_riderPollInterval) clearInterval(_riderPollInterval);
-  _riderPollInterval = setInterval(() => {
-    if(!document.hidden) pollForPendingOrder();
-  }, 20000);
-
-  // ── 4. Chat listener for any already-active order ─────────────────────────
+  // ── Chat listener for any already-active order ────────────────────────────
   if(riderState.activeOrder?.id){
     startRiderChatListener(riderState.activeOrder.id);
   }
@@ -3356,10 +3313,16 @@ function startRiderChatListener(orderId){
     })
     .on('broadcast',{event:'msg'},({payload})=>{
       if(!chatMsgs[orderId]) chatMsgs[orderId]=[];
-      chatMsgs[orderId].push(payload);
-      saveChatMsgs();
+      const already = chatMsgs[orderId].some(m => m.ts === payload.ts && m.role === payload.role);
+      if(!already){
+        chatMsgs[orderId].push(payload);
+        // Always persist — even when chat is closed, so history shows on open
+        localStorage.setItem('mb_chat_'+orderId, JSON.stringify(chatMsgs[orderId]));
+      }
       const chatOpen = chatOrderId === orderId && document.getElementById('chat-sheet')?.classList.contains('on');
-      if(!chatOpen){
+      if(chatOpen){
+        renderChatMessages(); // live update if sheet is open
+      } else {
         sendSystemNotif(
           `💬 ${payload.name}`,
           payload.text.slice(0,80),
@@ -3399,10 +3362,15 @@ function startOrderRealtime(oid){
       // Background chat listener — persistent banner + system notif for customer
     .on('broadcast',{event:'msg'},({payload})=>{
       if(!chatMsgs[oid]) chatMsgs[oid]=[];
-      chatMsgs[oid].push(payload);
-      saveChatMsgs();
+      const already = chatMsgs[oid].some(m => m.ts === payload.ts && m.role === payload.role);
+      if(!already){
+        chatMsgs[oid].push(payload);
+        localStorage.setItem('mb_chat_'+oid, JSON.stringify(chatMsgs[oid]));
+      }
       const chatOpen = chatOrderId === oid && document.getElementById('chat-sheet')?.classList.contains('on');
-      if(!chatOpen){
+      if(chatOpen){
+        renderChatMessages();
+      } else {
         sendSystemNotif(
           `💬 ${payload.name}`,
           payload.text.slice(0,80),
@@ -3468,6 +3436,83 @@ function ensureChatSheet(){
 }
 
 
+// Global — called from onclick in chat quick buttons
+// Must be global because the button HTML is injected as a string inside openChat
+function setAgreedFee(){
+  // Build a clean number-pad sheet instead of browser prompt (prompt is blocked on some mobiles)
+  const existing = document.getElementById('fee-sheet');
+  if(existing) existing.remove();
+
+  const sheet = document.createElement('div');
+  sheet.id = 'fee-sheet';
+  sheet.style.cssText = `
+    position:fixed;inset:0;z-index:3000;
+    background:rgba(0,0,0,.7);display:flex;align-items:flex-end;
+  `;
+  sheet.innerHTML = `
+    <div style="background:var(--dark2);border-radius:18px 18px 0 0;padding:20px 16px 32px;width:100%;max-width:480px;margin:0 auto">
+      <div style="font-family:var(--fh);font-size:.9rem;letter-spacing:1px;margin-bottom:14px;text-align:center">SET AGREED DELIVERY FEE</div>
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <span style="padding:12px 14px;background:var(--dark3);border-radius:8px;color:var(--muted);font-weight:700">KES</span>
+        <input id="fee-inp" type="number" inputmode="numeric" placeholder="e.g. 150"
+          style="flex:1;background:var(--dark3);border:2px solid var(--red);border-radius:8px;color:var(--white);padding:12px;font-size:1.1rem;outline:none"
+          oninput="this.value=this.value.replace(/[^0-9]/g,'')"/>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">
+        ${[50,100,150,200,300,500].map(v=>`
+          <button onclick="document.getElementById('fee-inp').value=${v}"
+            style="background:var(--dark3);color:var(--white);border:1px solid var(--line2);border-radius:8px;padding:10px;font-size:.85rem;cursor:pointer">
+            KES ${v}
+          </button>`).join('')}
+      </div>
+      <button onclick="confirmAgreedFee()"
+        style="width:100%;background:var(--red);color:#fff;border:none;border-radius:10px;padding:14px;font-size:.95rem;font-weight:700;cursor:pointer">
+        ✅ Confirm Fee
+      </button>
+      <button onclick="document.getElementById('fee-sheet').remove()"
+        style="width:100%;background:none;color:var(--muted);border:none;padding:10px;font-size:.85rem;cursor:pointer;margin-top:4px">
+        Cancel
+      </button>
+    </div>
+  `;
+  document.body.appendChild(sheet);
+  setTimeout(() => document.getElementById('fee-inp')?.focus(), 100);
+}
+
+function confirmAgreedFee(){
+  const val = document.getElementById('fee-inp')?.value.trim();
+  if(!val || isNaN(parseInt(val)) || parseInt(val) <= 0){
+    toast('Enter a valid amount','err'); return;
+  }
+  const fee = parseInt(val);
+  riderState.agreedFee = fee;
+  localStorage.setItem('mb_agreed_fee', String(fee));
+  document.getElementById('fee-sheet')?.remove();
+  toast(`✅ Delivery fee set: KES ${fee}`, 'ok', 4000);
+
+  // Send confirmation message in chat so customer also sees it
+  const orderId = chatOrderId || riderState.activeOrder?.id;
+  if(orderId){
+    const confirmMsg = {
+      role: 'rider',
+      name: riderState.name || 'Rider',
+      text: `✅ Delivery fee agreed: KES ${fee}. I'll collect cash at the door.`,
+      ts: Date.now(),
+      isFeeConfirm: true
+    };
+    if(!chatMsgs[orderId]) chatMsgs[orderId] = [];
+    chatMsgs[orderId].push(confirmMsg);
+    localStorage.setItem('mb_chat_'+orderId, JSON.stringify(chatMsgs[orderId]));
+    if(chatChannel){
+      chatChannel.send({ type:'broadcast', event:'msg', payload: confirmMsg });
+    }
+    renderChatMessages();
+  }
+
+  // Refresh delivery screen so fee shows updated
+  if(riderState.activeOrder) renderRiderDelivery();
+}
+
 function openChat(orderId, myRole){
   ensureChatSheet();
   chatOrderId=orderId; chatMyRole=myRole;
@@ -3493,24 +3538,20 @@ function openChat(orderId, myRole){
     ).join('');
   }
 
-  function setAgreedFee(){
-  const fee = prompt('Enter the agreed delivery fee (KES):');
-  if(!fee || isNaN(parseInt(fee))) return;
-  riderState.agreedFee = parseInt(fee);
-  localStorage.setItem('mb_agreed_fee', fee);
-  toast(`Fee set: KES ${fee} ✅`,'ok');
-  closeChat();
-}
-
   // Realtime broadcast channel for this order chat
   if(chatChannel){ chatChannel.unsubscribe().catch(()=>{}); }
   chatChannel=supa.channel('order-chat-'+orderId);
   chatChannel
     .on('broadcast',{event:'msg'},({payload})=>{
       chatMsgs[orderId] = chatMsgs[orderId] || [];
-      chatMsgs[orderId].push(payload);
-      renderChatMessages();
-      playBeep();
+      // De-duplicate by timestamp — prevents the same msg showing twice
+      const already = chatMsgs[orderId].some(m => m.ts === payload.ts && m.role === payload.role);
+      if(!already){
+        chatMsgs[orderId].push(payload);
+        localStorage.setItem('mb_chat_'+orderId, JSON.stringify(chatMsgs[orderId]));
+        renderChatMessages();
+        playBeep();
+      }
     })
     .subscribe();
 
@@ -3556,9 +3597,7 @@ async function sendChatMsg(){
   };
   if(!chatMsgs[chatOrderId]) chatMsgs[chatOrderId]=[];
   chatMsgs[chatOrderId].push(msg);
-  // After chatMsgs[orderId].push(msg) in sendChatMsg() and the broadcast listener, add:
-localStorage.setItem('mb_chat_'+chatOrderId, JSON.stringify(chatMsgs[chatOrderId]));
-  saveChatMsgs(); // persist before broadcast
+  localStorage.setItem('mb_chat_'+chatOrderId, JSON.stringify(chatMsgs[chatOrderId])); // persist
   renderChatMessages();
   // Broadcast to the other side
   if(chatChannel){
