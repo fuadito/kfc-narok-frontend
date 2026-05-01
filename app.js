@@ -769,6 +769,7 @@ function exitRole(){
   kDone=0; kOrders=[];
   if(kInterval){ clearInterval(kInterval); kInterval=null; }
   if(_locInterval){ clearInterval(_locInterval); _locInterval=null; }
+  if(_riderPollInterval){ clearInterval(_riderPollInterval); _riderPollInterval=null; }
   if(_clockInterval){ clearInterval(_clockInterval); _clockInterval=null; }
   if(trackInterval){    clearInterval(trackInterval);    trackInterval=null; }
 
@@ -1837,6 +1838,13 @@ async function launchRider(){
         renderRiderReg();
     } else {
         renderRiderHome();
+        // Poll immediately on launch — catches any order dispatched while logged out
+        setTimeout(async () => {
+          if(riderState.online && !riderState.activeOrder){
+            const data = await apiFetch('/api/rider/active-order');
+            if(data?.order) handleIncomingOrder(data.order);
+          }
+        }, 1500);
         if(riderState.activeOrder){
           // Already on a delivery — go straight to delivery tab
           rPanel('delivery', document.querySelector('[data-s="delivery"]'));
@@ -2058,7 +2066,7 @@ function renderRiderHome(){
       </div>
       <div class="stats2">
         <div class="sm"><div class="sm-v" id="r-trips">${riderState.todayTrips}</div><div class="sm-l">Today's Trips</div></div>
-        <div class="sm-v" id="r-earn">KES ${riderState.todayEarnings||0}</div><<div class="sm-l">Today's Earnings</div></div>
+        <div class="sm"><div class="sm-v" id="r-earn">KES ${riderState.todayEarnings||0}</div><div class="sm-l">Today's Earnings</div></div>
         <div class="sm"><div class="sm-v">${riderState.deliveries}</div><div class="sm-l">Total Trips</div></div>
         <div class="sm"><div class="sm-v" style="color:var(--green)">${riderState.rating}</div><div class="sm-l">Rating</div></div>
       </div>
@@ -3201,81 +3209,76 @@ async function resendChatNotif(orderId, fromName, myRole){
   toast('Ping sent — they will be notified again 🔔','ok',3000);
 }
 
-async function startRiderRealtime(){
-  const phone=riderState.phone||user.phone;
-  if(!phone) return;
+// ─── Rider poll interval — fires when tab comes back from background ──────────
+let _riderPollInterval = null;
+let _lastSeenOrderId   = null;   // tracks what we already showed so we don't re-alert
 
-  // Await permission so the dialog completes before any notification fires
-  await requestNotifPermission();
+// Central handler — called by Realtime broadcast, Postgres fallback AND the
+// visibility-change poll. All paths converge here so behaviour is identical.
+function handleIncomingOrder(payload){
+  if(riderState.activeOrder) return;           // already on a delivery
+  if(!riderState.online) return;               // rider is offline
+  // De-duplicate: don't re-show the alert if we already have this order pending
+  if(riderState.pendingOrder?.id === payload.id) return;
 
-  // ── Clean up any stale channels before re-subscribing ────────────────────
-  supa.channel('rider-dispatch').unsubscribe().catch(()=>{});
-  supa.channel('rider-assigned-'+phone).unsubscribe().catch(()=>{});
+  // Persist immediately — survives tab switch, background, refresh
+  riderState.pendingOrder = payload;
+  localStorage.setItem('mb_pending_order', JSON.stringify(payload));
 
-  // ── Handler shared by both dispatch broadcast AND postgres direct-assign ──
-  // Extracted so the exact same logic fires regardless of delivery path.
-  function handleIncomingOrder(payload){
-    // Guard: don't accept if already on a delivery
-    if(riderState.activeOrder) return;
+  // System notification — shows even when rider is in another app / phone locked
+  sendSystemNotif(
+    '🔔 New Delivery Order!',
+    `Deliver to ${payload.customer_area} · KES ${payload.delivery_fee || payload.food_amount}`,
+    () => {
+      window.focus();
+      const homeBtn = document.querySelector('#s-rider .bnav-btn[data-s="home"]');
+      rPanel('home', homeBtn);
+      requestAnimationFrame(() => showRiderOrderAlert(payload));
+    }
+  );
 
-    // BUG FIX 1: Store order in BOTH riderState AND localStorage immediately.
-    // Previously the order was only set in riderState — if the rider switched
-    // tabs/apps and came back, the dispatch broadcast was long gone and
-    // riderState was reset, so the order vanished.
-    riderState.pendingOrder = payload;   // keep pending until accepted/expired
-    localStorage.setItem('mb_pending_order', JSON.stringify(payload));
+  playBeep();
 
-    // BUG FIX 2: System notification fires correctly.
-    // Previously had a stray string literal before sendSystemNotif():
-    //   '🔔 New Delivery Order!', sendSystemNotif(...)
-    // That made sendSystemNotif a comma-expression arg — the onClick callback
-    // was never registered, so tapping the notification did nothing.
-    sendSystemNotif(
-      '🔔 New Delivery Order!',
-      `Deliver to ${payload.customer_area} · KES ${payload.delivery_fee || payload.food_amount}`,
-      () => {
-        window.focus();
-        // BUG FIX 3: rPanel('home') without a btn arg leaves the nav tab
-        // highlight on whichever tab the rider was on. Pass the actual DOM button.
-        const homeBtn = document.querySelector('#s-rider .bnav-btn[data-s="home"]');
-        rPanel('home', homeBtn);
-        // BUG FIX 4: renderRiderHome() creates a fresh #r-alert-zone but
-        // showRiderOrderAlert() reads that element immediately after — in the
-        // same synchronous call stack, before the browser has painted.
-        // A single rAF ensures the DOM is settled before we inject the alert HTML.
-        requestAnimationFrame(() => showRiderOrderAlert(payload));
-      }
-    );
-
-    playBeep();
-
-    // BUG FIX 5: The old check was `s-rider.classList.contains('on')` which
-    // is true whenever the rider section is the active screen — but the rider
-    // could be on the Earnings or Delivery tab, where #r-alert-zone doesn't
-    // exist yet (it's only created inside renderRiderHome's innerHTML).
-    // Solution: always navigate home AND show the alert, whether the rider
-    // is in the app or not.
-    const homeBtn = document.querySelector('#s-rider .bnav-btn[data-s="home"]');
+  // Always navigate home first so #r-alert-zone exists, then inject alert
+  const homeBtn = document.querySelector('#s-rider .bnav-btn[data-s="home"]');
+  if(document.getElementById('s-rider')?.classList.contains('on')){
     rPanel('home', homeBtn);
     requestAnimationFrame(() => showRiderOrderAlert(payload));
   }
 
-  // ── Broadcast channel — backend dispatches new orders here ───────────────
+  // Persistent banner for when rider is in another app but browser is open
+  showChatBanner(
+    payload.id,
+    'MotoBite',
+    `New order → ${payload.customer_area} · KES ${payload.delivery_fee || payload.food_amount}`,
+    'rider'
+  );
+}
+
+async function startRiderRealtime(){
+  const phone = riderState.phone || user.phone;
+  if(!phone) return;
+
+  await requestNotifPermission();
+
+  // Clean up stale channels
+  try { supa.channel('rider-dispatch').unsubscribe(); } catch{}
+  try { supa.channel('rider-assigned-'+phone).unsubscribe(); } catch{}
+
+  // ── 1. Supabase Broadcast — primary fast path ─────────────────────────────
   supa.channel('rider-dispatch')
     .on('broadcast', { event:'new_order' }, ({ payload }) => {
-      if(!riderState.online || riderState.activeOrder) return;
       handleIncomingOrder(payload);
     })
     .subscribe(status => {
-      // BUG FIX: Reconnect automatically if Supabase drops the channel
-      // (happens when browser tab goes to background for >30 s on some devices)
+      console.log('[Realtime] rider-dispatch:', status);
       if(status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED'){
-        console.warn('[Realtime] rider-dispatch channel lost, reconnecting in 3 s…');
-        setTimeout(startRiderRealtime, 3000);
+        console.warn('[Realtime] channel lost — reconnecting in 4 s');
+        setTimeout(startRiderRealtime, 4000);
       }
     });
 
-  // ── Postgres fallback — catches direct DB assignment (admin overrides) ───
+  // ── 2. Postgres fallback — direct DB assignment (admin manual assign) ─────
   supa.channel('rider-assigned-'+phone)
     .on('postgres_changes', {
       event:'UPDATE', schema:'public', table:'orders',
@@ -3287,7 +3290,47 @@ async function startRiderRealtime(){
     })
     .subscribe();
 
-  // ── Chat listener for any already-active order ────────────────────────────
+  // ── 3. Visibility-change poll — catches orders missed while backgrounded ──
+  // Supabase Realtime disconnects after ~30 s in background on mobile Chrome.
+  // When the rider returns to the tab, we poll once immediately to catch up.
+  // We also poll every 20 s while the tab is visible, as a belt-and-suspenders
+  // safety net in case the Realtime connection is silently dead.
+
+  async function pollForPendingOrder(){
+    if(riderState.activeOrder || !riderState.online) return;
+    try {
+      // Ask the backend: is there a 'ready' order currently assigned to me
+      // or dispatched to me that I haven't acknowledged yet?
+      const data = await apiFetch('/api/rider/active-order');
+      if(data?.order && !riderState.activeOrder){
+        handleIncomingOrder(data.order);
+      }
+      // Also check if there's an unaccepted pending order saved in localStorage
+      const saved = localStorage.getItem('mb_pending_order');
+      if(saved && !riderState.pendingOrder){
+        try {
+          const o = JSON.parse(saved);
+          // Only resurface if the order is less than 3 minutes old
+          const age = (Date.now() - new Date(o.paid_at || o.created_at).getTime()) / 1000;
+          if(age < 180) handleIncomingOrder(o);
+          else localStorage.removeItem('mb_pending_order');
+        } catch{}
+      }
+    } catch(e){ console.warn('Poll error:', e.message); }
+  }
+
+  // Poll immediately when tab becomes visible again (rider returns from another app)
+  document.addEventListener('visibilitychange', () => {
+    if(!document.hidden) pollForPendingOrder();
+  });
+
+  // Periodic safety-net poll every 20 s while tab is visible
+  if(_riderPollInterval) clearInterval(_riderPollInterval);
+  _riderPollInterval = setInterval(() => {
+    if(!document.hidden) pollForPendingOrder();
+  }, 20000);
+
+  // ── 4. Chat listener for any already-active order ─────────────────────────
   if(riderState.activeOrder?.id){
     startRiderChatListener(riderState.activeOrder.id);
   }
