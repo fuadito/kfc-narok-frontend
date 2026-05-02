@@ -3398,16 +3398,23 @@ function startOrderRealtime(oid){
 // RIDER ↔ CUSTOMER CHAT  (delivery fee negotiation)
 // Uses Supabase Realtime broadcast — no extra DB table required.
 // Channel name: order-chat-{orderId}
+ 
+// Chat persistence — always keyed by orderId: 'mb_chat_<orderId>'
+// saveChatMsgs(orderId) saves one order's messages
+// loadChatMsgs(orderId) returns that order's messages (or [])
 
-// Chat persistence helpers — save/load keyed by orderId
-function saveChatMsgs(){
-  try{ localStorage.setItem('mb_chat', JSON.stringify(chatMsgs)); }catch{}
-}
-function loadChatMsgs(){
+function saveChatMsgs(orderId){
+  if(!orderId) return;
   try{
-    const raw = localStorage.getItem('mb_chat');
-    if(raw) chatMsgs = JSON.parse(raw);
+    localStorage.setItem('mb_chat_'+orderId, JSON.stringify(chatMsgs[orderId] || []));
   }catch{}
+}
+function loadChatMsgs(orderId){
+  if(!orderId) return [];
+  try{
+    const raw = localStorage.getItem('mb_chat_'+orderId);
+    return raw ? JSON.parse(raw) : [];
+  }catch{ return []; }
 }
 
 function ensureChatSheet(){
