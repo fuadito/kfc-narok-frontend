@@ -2068,7 +2068,7 @@ function renderRiderHome(){
       </div>
       <div class="stats2">
         <div class="sm"><div class="sm-v" id="r-trips">${riderState.todayTrips}</div><div class="sm-l">Today's Trips</div></div>
-        <div class="sm"><div class="sm-v" id="r-earn">KES ${riderState.todayEarnings||0}</div><<div class="sm-l">Today's Earnings</div></div>
+        <div class="sm"><div class="sm-v" id="r-earn">KES ${riderState.todayEarnings||0}</div><div class="sm-l">Today's Earnings</div></div>
         <div class="sm"><div class="sm-v">${riderState.deliveries}</div><div class="sm-l">Total Trips</div></div>
         <div class="sm"><div class="sm-v" style="color:var(--green)">${riderState.rating}</div><div class="sm-l">Rating</div></div>
       </div>
