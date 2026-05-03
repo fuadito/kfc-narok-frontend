@@ -488,7 +488,7 @@ const fullPhone = phone.startsWith('0')
     // OTP verified - complete registration
     const savedName = localStorage.getItem('temp_name');
     
-    const res = await apiFetch('/api/auth/register', {
+    const res = await apiFetch('/api/customer/login', {
       method: 'POST',
       body: { phone: verifiedPhone, name: savedName }
     });
@@ -719,7 +719,15 @@ return;
           }
           // Approved rider — restore full state and go to dashboard
           riderState={...riderState,...data,phone:user.phone};
-          localStorage.setItem('mb_rider',JSON.stringify({phone:user.phone}));
+          // Cache key fields so session restore can work offline without a network call
+          localStorage.setItem('mb_rider',JSON.stringify({
+            phone:user.phone,
+            name:data.name,
+            rating:data.rating,
+            deliveries:data.total_deliveries,
+            status:data.status,
+            online:false
+           }));
           toast(`Welcome back, ${data.name}! 🏍️`,'ok');
           reset(); launchRider();
           return;
@@ -792,6 +800,8 @@ function exitRole(){
   localStorage.removeItem('mb_active_delivery');
   localStorage.removeItem('mb_agreed_fee');
   localStorage.removeItem('mb_active_order');
+  if(window._riderPollInterval){ clearInterval(window._riderPollInterval); window._riderPollInterval=null; }
+  if(window._riderVisibilityCb){ document.removeEventListener('visibilitychange', window._riderVisibilityCb); window._riderVisibilityCb=null; }
 
   // If user arrived via ?role= URL — return to that role's login, not landing
   const urlRole = new URLSearchParams(window.location.search).get('role');
@@ -2058,7 +2068,7 @@ function renderRiderHome(){
       </div>
       <div class="stats2">
         <div class="sm"><div class="sm-v" id="r-trips">${riderState.todayTrips}</div><div class="sm-l">Today's Trips</div></div>
-        <div class="sm-v" id="r-earn">KES ${riderState.todayEarnings||0}</div><<div class="sm-l">Today's Earnings</div></div>
+        <div class="sm"><div class="sm-v" id="r-earn">KES ${riderState.todayEarnings||0}</div><<div class="sm-l">Today's Earnings</div></div>
         <div class="sm"><div class="sm-v">${riderState.deliveries}</div><div class="sm-l">Total Trips</div></div>
         <div class="sm"><div class="sm-v" style="color:var(--green)">${riderState.rating}</div><div class="sm-l">Rating</div></div>
       </div>
@@ -2947,7 +2957,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   const saved = localStorage.getItem('mb_user');
   if(saved){ try{ user=JSON.parse(saved); }catch{} }
-  loadChatMsgs(); // restore chat history across sessions
 
   // If a ?role= param is present, ALWAYS go to that role's login —
   // never auto-restore a previous session. Lets staff open kitchen/rider/admin
@@ -2971,46 +2980,114 @@ document.addEventListener('DOMContentLoaded', async () => {
   if(savedRider){
     try{
       const rd = JSON.parse(savedRider);
+      if(!rd.phone) throw new Error('no phone in saved rider');
       user.phone = rd.phone;
-      const data = await apiFetch('/api/rider/login',{method:'POST',body:{phone:rd.phone}});
-      if(data && data.name && data.status === 'approved'){
-        riderState = {...riderState, ...data, phone:rd.phone};
-        // Restore online toggle state — rider shouldn't have to re-toggle after refresh
-        if(rd.online) riderState.online = true;
-        role = 'rider'; launchRider();
-        // Restore chat listener if rider had an active order before refresh
+
+            // Restore from localStorage immediately — don't wait for network.
+      // The rider's name may be cached in mb_rider from a previous session.
+      if(rd.name){
+        riderState = {
+          ...riderState,
+          name:      rd.name,
+          phone:     rd.phone,
+          rating:    rd.rating    || 0,
+          deliveries:rd.deliveries|| 0,
+          todayTrips:rd.todayTrips|| 0,
+          status:    rd.status    || 'approved',
+          online:    rd.online    || false,
+        };
+        role = 'rider';
+        launchRider();
         if(riderState.activeOrder?.id) startRiderChatListener(riderState.activeOrder.id);
+        // Background-verify with server — update if different, but NEVER log out on failure.
+
+
+       // If Render is sleeping, apiFetch returns null — we keep the local session intact.
+        apiFetch('/api/rider/login', {method:'POST', body:{phone:rd.phone}})
+          .then(data => {
+            if(!data) return; // network error / backend sleeping — keep local session
+            if(data.exists === false){
+              // Server says this phone has no rider account — clear the session
+              localStorage.removeItem('mb_rider');
+              role = null; screen('s-landing');
+              return;
+            }
+            if(data.status === 'suspended'){
+              localStorage.removeItem('mb_rider');
+              role = null; screen('s-landing');
+              toast('Your rider account has been suspended. Contact MotoBite support.','err',8000);
+              return;
+            }  if(data.name && data.status === 'approved'){
+              // Silently update riderState with fresh server data
+              riderState = {...riderState, ...data, phone:rd.phone};
+              if(rd.online) riderState.online = true;
+              // Persist updated data back to localStorage
+              const updated = {...rd, name:data.name, rating:data.rating,
+                deliveries:data.total_deliveries, status:data.status};
+              localStorage.setItem('mb_rider', JSON.stringify(updated));
+            }
+          });
         return;
-      } else {
-        localStorage.removeItem('mb_rider');
-      }
-    }catch{
-      localStorage.removeItem('mb_rider');
-    }
   }
 
+  // No name cached — must hit the network (first restore after registration)
+      const data = await apiFetch('/api/rider/login',{method:'POST',body:{phone:rd.phone}});
+
+      if(!data){
+        // Network failure — restore anyway from what we have stored
+        // Better to show the rider their dashboard than log them out on a slow connection
+        riderState = {...riderState, phone:rd.phone, online: rd.online||false};
+        role = 'rider'; launchRider(); return;
+      }
+      if(data.name && data.status === 'approved'){
+        riderState = {...riderState, ...data, phone:rd.phone};
+        if(rd.online) riderState.online = true;
+        // Cache name + key fields so next restore can skip the network call
+        const toStore = {...rd, name:data.name, rating:data.rating,
+          deliveries:data.total_deliveries, status:data.status};
+        localStorage.setItem('mb_rider', JSON.stringify(toStore));
+        role = 'rider'; launchRider();
+        if(riderState.activeOrder?.id) startRiderChatListener(riderState.activeOrder.id);
+        return;
+      }
+      // Server says not approved / not found — clear session
+      localStorage.removeItem('mb_rider');
+
+    }catch(e){
+      console.warn('Rider session restore error:', e.message);
+      // Do NOT delete mb_rider on unexpected errors — keep session and try next time
+    }
+  }
   const { data: { session }} = await supa.auth.getSession();
   if(session){
     role = 'admin'; launchAdmin(); return;
   }
 
 }); // ← closes DOMContentLoaded
-
-// onAuthStateChange lives OUTSIDE DOMContentLoaded at the top level
+// onAuthStateChange — ONLY affects admin sessions.
+// Riders and customers are NOT Supabase auth users. Firing screen('s-landing')
+// on every SIGNED_OUT event would log out riders/customers whenever the anon
+// token drifts or Supabase does a silent refresh in the background.
 supa.auth.onAuthStateChange((event, session) => {
-  // don't override if user arrived via ?role= URL
-    const urlRole = new URLSearchParams(window.location.search).get('role');
-  if(urlRole) return; // let URL role take priority
-  
+  const urlRole = new URLSearchParams(window.location.search).get('role');
+  if(urlRole) return;
+
   if(event === 'SIGNED_IN' && role !== 'admin'){
-    role = 'admin';
-    launchAdmin();
+    // Only take action if no other role is active — avoids hijacking rider/customer
+    if(!role){ role = 'admin'; launchAdmin(); }
   }
-  if(event === 'SIGNED_OUT'){
+
+  if(event === 'SIGNED_OUT' && role === 'admin'){
+    // Only log out if we were actually in admin mode
     role = null;
     screen('s-landing');
   }
+  // SIGNED_OUT for any other role = ignore completely.
+  // Rider/customer sessions are managed by mb_rider/mb_user localStorage keys,
+  // not by Supabase auth. We never call supa.auth.signOut() for them.
 }); // ← closes onAuthStateChange
+
+
 
 
 // Admin Supabase Login
@@ -3286,6 +3363,40 @@ async function startRiderRealtime(){
       }
     })
     .subscribe();
+
+      // ── 3. Visibility-change poll — catches orders missed while backgrounded ──
+  // Supabase Realtime disconnects after ~30 s on mobile when tab goes to background.
+  // When rider comes back to the tab, poll immediately for any waiting order.
+  // Also poll every 20 s while visible as a safety net for silently dead sockets.
+
+  async function pollForPendingOrder(){
+    if(riderState.activeOrder || !riderState.online) return;
+    try {
+      const data = await apiFetch('/api/rider/active-order');
+      if(data?.order && !riderState.activeOrder) handleIncomingOrder(data.order);
+      // Resurface saved pending order if less than 3 minutes old
+      const saved = localStorage.getItem('mb_pending_order');
+      if(saved && !riderState.pendingOrder){
+        try {
+          const o = JSON.parse(saved);
+          const ageSeconds = (Date.now() - new Date(o.paid_at || o.created_at).getTime()) / 1000;
+          if(ageSeconds < 180) handleIncomingOrder(o);
+          else localStorage.removeItem('mb_pending_order');
+        } catch{}
+      }
+    } catch(e){ console.warn('[poll] error:', e.message); }
+  }
+
+  // Remove any previous listener before adding a new one (prevents duplicates on reconnect)
+  document.removeEventListener('visibilitychange', window._riderVisibilityCb);
+  window._riderVisibilityCb = () => { if(!document.hidden) pollForPendingOrder(); };
+  document.addEventListener('visibilitychange', window._riderVisibilityCb);
+
+  // 20-second safety-net poll while tab is visible
+  if(window._riderPollInterval) clearInterval(window._riderPollInterval);
+  window._riderPollInterval = setInterval(() => {
+    if(!document.hidden) pollForPendingOrder();
+  }, 20000);
 
   // ── Chat listener for any already-active order ────────────────────────────
   if(riderState.activeOrder?.id){
